@@ -92,17 +92,19 @@ func NewPreparer(
 func (p *sourcePreparerImpl) PrepareSources(
 	ctx context.Context, component components.Component, outputDir string, applyOverlays bool,
 ) error {
-	// Use the source manager to fetch source files (archives, patches, etc.)
-	err := p.sourceManager.FetchFiles(ctx, component, outputDir)
+	// Use the source manager to fetch the component (spec file and sidecar files).
+	// This runs before FetchFiles so that the spec is available for origin types
+	// that need to extract information from it (e.g., cargo-vendor reads Version).
+	err := p.sourceManager.FetchComponent(ctx, component, outputDir)
 	if err != nil {
-		return fmt.Errorf("failed to fetch source files for component %#q:\n%w",
+		return fmt.Errorf("failed to fetch sources for component %#q:\n%w",
 			component.GetName(), err)
 	}
 
-	// Use the source manager to fetch the component (spec file and sidecar files).
-	err = p.sourceManager.FetchComponent(ctx, component, outputDir)
+	// Use the source manager to fetch source files (archives, patches, etc.)
+	err = p.sourceManager.FetchFiles(ctx, component, outputDir)
 	if err != nil {
-		return fmt.Errorf("failed to fetch sources for component %#q:\n%w",
+		return fmt.Errorf("failed to fetch source files for component %#q:\n%w",
 			component.GetName(), err)
 	}
 

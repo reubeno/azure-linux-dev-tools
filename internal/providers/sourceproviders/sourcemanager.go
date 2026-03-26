@@ -15,6 +15,8 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/components"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
+	"github.com/microsoft/azure-linux-dev-tools/internal/providers/sourcegen"
+	"github.com/microsoft/azure-linux-dev-tools/internal/providers/sourcegen/cargovendor"
 	"github.com/microsoft/azure-linux-dev-tools/internal/providers/sourceproviders/fedorasource"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/downloader"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
@@ -110,10 +112,15 @@ type sourceManager struct {
 	// Lookaside downloader for fetching source tarballs from upstream caches
 	lookasideDownloader fedorasource.FedoraSourceDownloader
 
+	// Registry of source generators for origin types that produce files locally
+	// (e.g., cargo-vendor). Nil entries are never expected after construction.
+	sourceGenRegistry *sourcegen.Registry
+
 	// Retry configuration for network operations
 	retryConfig retry.Config
 
 	// Dependencies extracted from environment
+	env              *azldev.Env
 	dryRunnable      opctx.DryRunnable
 	eventListener    opctx.EventListener
 	cmdFactory       opctx.CmdFactory
@@ -135,11 +142,17 @@ func NewSourceManager(env *azldev.Env, distro ResolvedDistro) (SourceManager, er
 		retryCfg.MaxAttempts = env.NetworkRetries()
 	}
 
+	// Build the source generator registry with all known generator types.
+	genRegistry := sourcegen.NewRegistry()
+	genRegistry.Register(projectconfig.OriginTypeCargoVendor, cargovendor.New(env))
+
 	// Extract dependencies from environment
 	manager := &sourceManager{
 		upstreamComponentProviders: make([]ComponentSourceProvider, 0),
 		fileProviders:              make([]FileSourceProvider, 0),
+		sourceGenRegistry:          genRegistry,
 		retryConfig:                retryCfg,
+		env:                        env,
 		dryRunnable:                env,
 		eventListener:              env,
 		cmdFactory:                 env,
@@ -266,7 +279,7 @@ func (m *sourceManager) fetchSourceFile(
 			fileRef.Filename)
 	}
 
-	return m.downloadFromOrigin(ctx, httpDownloader, fileRef, destPath)
+	return m.resolveFromOrigin(ctx, httpDownloader, component, fileRef, destDirPath, destPath)
 }
 
 // tryLookasideDownload attempts to download a source file from the lookaside cache.
@@ -302,13 +315,22 @@ func (m *sourceManager) tryLookasideDownload(
 	return nil
 }
 
-// downloadFromOrigin downloads a source file using its configured origin.
-func (m *sourceManager) downloadFromOrigin(
+// resolveFromOrigin acquires a source file using its configured origin. For download
+// origins the file is fetched from a URI; for generator-backed origins (e.g., cargo-vendor)
+// the file is produced locally by a registered [sourcegen.SourceGenerator].
+func (m *sourceManager) resolveFromOrigin(
 	ctx context.Context,
 	httpDownloader downloader.Downloader,
+	component components.Component,
 	fileRef *projectconfig.SourceFileReference,
+	destDirPath string,
 	destPath string,
 ) error {
+	// Check if a source generator handles this origin type.
+	if m.sourceGenRegistry.Has(fileRef.Origin.Type) {
+		return m.generateFromOrigin(component, fileRef, destDirPath, destPath)
+	}
+
 	switch fileRef.Origin.Type {
 	case projectconfig.OriginTypeURI:
 		if fileRef.Origin.Uri == "" {
@@ -328,10 +350,48 @@ func (m *sourceManager) downloadFromOrigin(
 
 		return nil
 
+	case projectconfig.OriginTypeCargoVendor:
+		// Handled by the generator registry above; this case should be unreachable.
+		return fmt.Errorf("origin type %#q should be handled by a registered source generator",
+			fileRef.Origin.Type)
+
 	default:
 		return fmt.Errorf("unsupported origin type %#q for source file %#q",
 			fileRef.Origin.Type, fileRef.Filename)
 	}
+}
+
+// generateFromOrigin delegates source file production to a registered source generator.
+func (m *sourceManager) generateFromOrigin(
+	component components.Component,
+	fileRef *projectconfig.SourceFileReference,
+	destDirPath string,
+	destPath string,
+) error {
+	gen, err := m.sourceGenRegistry.Get(fileRef.Origin.Type)
+	if err != nil {
+		return fmt.Errorf("failed to look up source generator for origin type %#q:\n%w",
+			fileRef.Origin.Type, err)
+	}
+
+	if err := gen.CheckPrerequisites(m.env); err != nil {
+		return fmt.Errorf("prerequisite check failed for origin type %#q:\n%w",
+			fileRef.Origin.Type, err)
+	}
+
+	request := &sourcegen.GenerateRequest{
+		Component:  component,
+		Origin:     fileRef.Origin,
+		DestPath:   destPath,
+		SourcesDir: destDirPath,
+	}
+
+	if err := gen.Generate(m.env, request); err != nil {
+		return fmt.Errorf("source generation failed for %#q (origin type %#q):\n%w",
+			fileRef.Filename, fileRef.Origin.Type, err)
+	}
+
+	return nil
 }
 
 // downloadAndValidate downloads a file from the given URL with retries, optionally

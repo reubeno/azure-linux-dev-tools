@@ -207,10 +207,37 @@ The `origin` field specifies how to obtain the source file.
 
 | Field | TOML Key | Type | Required | Description |
 |-------|----------|------|----------|-------------|
-| Type | `type` | string | **Yes** | Origin type. Currently only `"download"` is supported. |
+| Type | `type` | string | **Yes** | Origin type: `"download"` or `"cargo-vendor"`. |
 | URI | `uri` | string | No | URI to download the file from (required when type is `"download"`) |
+| Version | `version` | string | No | Explicit crate version for `"cargo-vendor"` origins. When omitted, the version is extracted from the component's spec file. |
+| Crate name | `crate-name` | string | No | Explicit crate name for `"cargo-vendor"` origins. When omitted, the crate name is derived from the component name (stripping any `rust-` prefix). |
 
-### Example
+#### Origin type: `download`
+
+Downloads the file from the specified URI. Requires the `uri` field.
+
+#### Origin type: `cargo-vendor`
+
+Generates a vendored Cargo dependency archive by running `rust2rpm`. This is
+useful for Rust packages that need pre-vendored dependencies for offline builds.
+
+The crate name is resolved with the following priority:
+
+1. Explicit `crate-name` property (if set)
+2. Component name with `rust-` prefix stripped (if the name starts with `rust-`)
+3. Component name as-is
+
+The crate version is resolved by:
+
+1. Explicit `version` property (if set) — avoids the overhead of spec parsing
+2. Parsing the `Version:` tag from the component's spec file (requires a build environment)
+
+**Prerequisite:** `rust2rpm` must be installed on the host. If it is missing, azldev
+will offer to install it automatically.
+
+### Examples
+
+#### Download origin
 
 ```toml
 [[components.shim.source-files]]
@@ -224,6 +251,22 @@ filename = "shimaa64.efi"
 hash = "57aa116d1c91a9ec36ab8b46c9164ae19af192b..."
 hash-type = "SHA512"
 origin = { type = "download", uri = "https://example.com/repo/pkgs/shim/shimaa64.efi/sha512/.../shimaa64.efi" }
+```
+
+#### Cargo-vendor origin (version auto-extracted from spec)
+
+```toml
+[[components.rust-ripgrep.source-files]]
+filename = "vendor.tar.xz"
+origin = { type = "cargo-vendor" }
+```
+
+#### Cargo-vendor origin (explicit version and crate name)
+
+```toml
+[[components.rust-ripgrep.source-files]]
+filename = "vendor.tar.xz"
+origin = { type = "cargo-vendor", version = "14.1.1", crate-name = "ripgrep" }
 ```
 
 ## Complete Examples
