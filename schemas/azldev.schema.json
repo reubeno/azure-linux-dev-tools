@@ -629,6 +629,14 @@
             "out"
           ]
         },
+        "generated-specs-dir": {
+          "type": "string",
+          "title": "Generated Specs Directory",
+          "description": "Path to the directory where generated spec files are written",
+          "examples": [
+            "out/specs"
+          ]
+        },
         "default-distro": {
           "$ref": "#/$defs/DistroReference",
           "title": "Default Distro",

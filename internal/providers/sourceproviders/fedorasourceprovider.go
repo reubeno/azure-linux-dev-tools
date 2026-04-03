@@ -174,11 +174,15 @@ func (g *FedoraSourcesProviderImpl) processClonedRepo(
 
 	// Extract sources from repo (downloads lookaside files into the temp dir).
 	// Files in skipFilenames are not downloaded — they were already fetched by FetchFiles.
-	err := g.downloader.ExtractSourcesFromRepo(
-		ctx, tempDir, upstreamName, g.lookasideBaseURI, skipFilenames,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to extract sources from git repository:\n%w", err)
+	// When SkipLookasideDownload is set, skip entirely — only the spec and sidecar files
+	// from the dist-git clone are kept.
+	if !opts.SkipLookasideDownload {
+		err := g.downloader.ExtractSourcesFromRepo(
+			ctx, tempDir, upstreamName, g.lookasideBaseURI, skipFilenames,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to extract sources from git repository:\n%w", err)
+		}
 	}
 
 	// If the upstream name differs from the component name, rename the spec in temp dir.

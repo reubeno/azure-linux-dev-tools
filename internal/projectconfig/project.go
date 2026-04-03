@@ -101,6 +101,8 @@ type ProjectInfo struct {
 	WorkDir string `toml:"work-dir,omitempty" json:"workDir,omitempty" jsonschema:"title=Work Directory,description=Path to temporary working directory,example=work"`
 	// Path to output directory to use for this project.
 	OutputDir string `toml:"output-dir,omitempty" json:"outputDir,omitempty" jsonschema:"title=Output Directory,description=Path to the output directory,example=out"`
+	// Path to directory where generated spec files are written by 'component generate-spec'.
+	GeneratedSpecsDir string `toml:"generated-specs-dir,omitempty" json:"generatedSpecsDir,omitempty" jsonschema:"title=Generated Specs Directory,description=Path to the directory where generated spec files are written,example=out/specs"`
 
 	// Default-selected distro. May be overridden at runtime.
 	DefaultDistro DistroReference `toml:"default-distro,omitempty" json:"defaultDistro,omitempty" jsonschema:"title=Default Distro,description=Default selected distro reference"`
@@ -129,6 +131,7 @@ func (p *ProjectInfo) WithAbsolutePaths(referenceDir string) *ProjectInfo {
 	result.LogDir = makeAbsolute(referenceDir, result.LogDir)
 	result.WorkDir = makeAbsolute(referenceDir, result.WorkDir)
 	result.OutputDir = makeAbsolute(referenceDir, result.OutputDir)
+	result.GeneratedSpecsDir = makeAbsolute(referenceDir, result.GeneratedSpecsDir)
 
 	return result
 }

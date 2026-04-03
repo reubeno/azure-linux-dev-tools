@@ -55,6 +55,11 @@ type FetchComponentOptions struct {
 	// in the fetched component sources instead of deleting it. This is required for building
 	// synthetic git history from overlay blame metadata.
 	PreserveGitDir bool
+
+	// SkipLookasideDownload, when true, instructs the provider to skip downloading source
+	// tarballs from the lookaside cache. The spec file and other sidecar files from the
+	// dist-git repository are still fetched.
+	SkipLookasideDownload bool
 }
 
 // FetchComponentOption is a functional option for configuring component fetch behavior.
@@ -65,6 +70,14 @@ type FetchComponentOption func(*FetchComponentOptions)
 func WithPreserveGitDir() FetchComponentOption {
 	return func(o *FetchComponentOptions) {
 		o.PreserveGitDir = true
+	}
+}
+
+// WithSkipLookasideDownload returns a [FetchComponentOption] that instructs the provider to
+// skip downloading source tarballs from the lookaside cache.
+func WithSkipLookasideDownload() FetchComponentOption {
+	return func(o *FetchComponentOptions) {
+		o.SkipLookasideDownload = true
 	}
 }
 
@@ -160,6 +173,19 @@ func ResolveDistro(env *azldev.Env, component components.Component) (ResolvedDis
 	}, nil
 }
 
+// SourceManagerOption is a functional option for configuring [SourceManager] behavior at
+// construction time.
+type SourceManagerOption func(*sourceManager)
+
+// WithSkipLookaside returns a [SourceManagerOption] that disables all lookaside cache
+// downloads. Source files that have no configured origin are silently skipped instead
+// of producing an error.
+func WithSkipLookaside() SourceManagerOption {
+	return func(m *sourceManager) {
+		m.skipLookaside = true
+	}
+}
+
 type sourceManager struct {
 	// Upstream component providers (can have multiple, e.g., different RPM repos)
 	upstreamComponentProviders []ComponentSourceProvider
@@ -180,11 +206,14 @@ type sourceManager struct {
 	fs               opctx.FS
 	lookasideBaseURI string
 	disableOrigins   bool
+
+	// skipLookaside, when true, disables all lookaside cache downloads.
+	skipLookaside bool
 }
 
 var _ SourceManager = (*sourceManager)(nil)
 
-func NewSourceManager(env *azldev.Env, distro ResolvedDistro) (SourceManager, error) {
+func NewSourceManager(env *azldev.Env, distro ResolvedDistro, opts ...SourceManagerOption) (SourceManager, error) {
 	if env == nil {
 		return nil, errors.New("environment cannot be nil")
 	}
@@ -206,6 +235,12 @@ func NewSourceManager(env *azldev.Env, distro ResolvedDistro) (SourceManager, er
 		fs:                         env.FS(),
 		lookasideBaseURI:           distro.Definition.LookasideBaseURI,
 		disableOrigins:             distro.Definition.DisableOrigins,
+	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(manager)
+		}
 	}
 
 	// Create lookaside downloader for fetching source tarballs
@@ -304,7 +339,7 @@ func (m *sourceManager) fetchSourceFile(
 	}
 
 	// Phase 1: Try lookaside cache if hash info is available
-	if fileRef.Hash != "" && fileRef.HashType != "" {
+	if !m.skipLookaside && fileRef.Hash != "" && fileRef.HashType != "" {
 		lookasideErr := m.tryLookasideDownload(ctx, httpDownloader, component, fileRef, destPath)
 		if lookasideErr == nil {
 			return nil
@@ -322,6 +357,13 @@ func (m *sourceManager) fetchSourceFile(
 	}
 
 	if fileRef.Origin.Type == "" {
+		if m.skipLookaside {
+			slog.Debug("Skipping source file with no origin (lookaside disabled)",
+				"filename", fileRef.Filename)
+
+			return nil
+		}
+
 		return fmt.Errorf("source file %#q not found in lookaside cache and no origin configured",
 			fileRef.Filename)
 	}
@@ -519,6 +561,13 @@ func (m *sourceManager) fetchLocalComponent(
 			component.GetName(), err)
 	}
 
+	if m.skipLookaside {
+		slog.Debug("Skipping lookaside source downloads (lookaside disabled)",
+			"component", component.GetName())
+
+		return nil
+	}
+
 	// Download source files from lookaside cache if available
 	err = m.downloadLookasideSources(ctx, component, destDirPath)
 	if err != nil {
@@ -560,6 +609,10 @@ func (m *sourceManager) fetchUpstreamComponent(
 	if len(m.upstreamComponentProviders) == 0 {
 		return fmt.Errorf("no upstream component origins configured for component %#q",
 			component.GetName())
+	}
+
+	if m.skipLookaside {
+		opts = append(opts, WithSkipLookasideDownload())
 	}
 
 	var lastError error
