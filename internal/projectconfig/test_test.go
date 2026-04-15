@@ -18,7 +18,8 @@ func TestTestConfig_Validate(t *testing.T) {
 			Type: projectconfig.TestTypePytest,
 			Pytest: &projectconfig.PytestConfig{
 				WorkingDir: "tests",
-				Args:       []string{"cases/", "--image-path", "{image}"},
+				TestPaths:  []string{"cases/"},
+				ExtraArgs:  []string{"--image-path", "{image-path}"},
 			},
 		}
 		assert.NoError(t, testConfig.Validate())
@@ -144,21 +145,21 @@ func TestTestConfig_MergeUpdatesFrom(t *testing.T) {
 		assert.Equal(t, "tests", base.Pytest.WorkingDir)
 	})
 
-	t.Run("merge appends args", func(t *testing.T) {
+	t.Run("merge appends test-paths", func(t *testing.T) {
 		base := projectconfig.TestConfig{
 			Name: "smoke",
 			Type: projectconfig.TestTypePytest,
 			Pytest: &projectconfig.PytestConfig{
-				Args: []string{"cases/"},
+				TestPaths: []string{"cases/"},
 			},
 		}
 		other := projectconfig.TestConfig{
 			Pytest: &projectconfig.PytestConfig{
-				Args: []string{"--verbose"},
+				TestPaths: []string{"extra/"},
 			},
 		}
 		require.NoError(t, base.MergeUpdatesFrom(&other))
-		assert.Equal(t, []string{"cases/", "--verbose"}, base.Pytest.Args)
+		assert.Equal(t, []string{"cases/", "extra/"}, base.Pytest.TestPaths)
 	})
 }
 

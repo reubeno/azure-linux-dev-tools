@@ -24,9 +24,9 @@ const (
 	// venvDirName is the name of the venv directory created under the azldev work dir.
 	venvDirName = "pytest-venv"
 
-	// imagePlaceholder is the placeholder token in pytest args that gets replaced with the
-	// actual image path at runtime.
-	imagePlaceholder = "{image}"
+	// imagePlaceholder is the placeholder token in pytest extra-args that gets replaced with
+	// the actual image path at runtime.
+	imagePlaceholder = "{image-path}"
 )
 
 // RunPytestSuite runs a pytest-based test suite natively using a Python venv.
@@ -67,8 +67,8 @@ func RunPytestSuite(
 		return err
 	}
 
-	// Build the pytest command with placeholder substitution.
-	pytestArgs := BuildNativePytestArgs(pytestConfig.Args, options)
+	// Build the pytest command: expand test paths, substitute placeholders in extra args.
+	pytestArgs := BuildNativePytestArgs(pytestConfig, options)
 
 	slog.Info("Running pytest", slog.Any("args", pytestArgs))
 
@@ -182,37 +182,76 @@ func installPytestDependencies(env *azldev.Env, venvPython string, workingDir st
 	return nil
 }
 
-// BuildNativePytestArgs constructs pytest arguments by substituting placeholders in the
-// configured args with actual runtime values.
-func BuildNativePytestArgs(configArgs []string, options *ImageTestOptions) []string {
+// BuildNativePytestArgs constructs the full pytest argument list from the config.
+// Test paths are glob-expanded relative to the working directory. Extra args are passed
+// verbatim after placeholder substitution. The --junit-xml flag is appended automatically
+// when requested via CLI.
+func BuildNativePytestArgs(pytestConfig *projectconfig.PytestConfig, options *ImageTestOptions) []string {
 	absImagePath, err := filepath.Abs(options.ImagePath)
 	if err != nil {
-		// Fall back to the original path if Abs fails.
 		absImagePath = options.ImagePath
 	}
 
-	args := make([]string, 0, len(configArgs))
+	args := make([]string, 0, len(pytestConfig.TestPaths)+len(pytestConfig.ExtraArgs))
 
-	for _, arg := range configArgs {
+	// Expand test paths (glob patterns resolved relative to working dir).
+	for _, testPath := range pytestConfig.TestPaths {
+		if containsGlobMeta(testPath) {
+			args = append(args, expandGlob(testPath, pytestConfig.WorkingDir)...)
+		} else {
+			args = append(args, testPath)
+		}
+	}
+
+	// Substitute placeholders in extra args (never glob-expanded).
+	for _, arg := range pytestConfig.ExtraArgs {
 		args = append(args, strings.ReplaceAll(arg, imagePlaceholder, absImagePath))
 	}
 
-	// Append --junit-xml if requested and not already present in the args.
+	// Append --junit-xml when requested via CLI.
 	if options.JUnitXMLPath != "" {
-		hasJUnitXML := false
-
-		for _, arg := range args {
-			if strings.HasPrefix(arg, "--junit-xml") {
-				hasJUnitXML = true
-
-				break
-			}
-		}
-
-		if !hasJUnitXML {
-			args = append(args, "--junit-xml", options.JUnitXMLPath)
-		}
+		args = append(args, "--junit-xml", options.JUnitXMLPath)
 	}
 
 	return args
+}
+
+// containsGlobMeta returns true if the string contains glob metacharacters.
+func containsGlobMeta(s string) bool {
+	return strings.ContainsAny(s, "*?[")
+}
+
+// expandGlob expands a glob pattern relative to workingDir. If the pattern matches no
+// files, the original pattern is returned unchanged (letting pytest report the error).
+func expandGlob(pattern string, workingDir string) []string {
+	// Resolve the pattern relative to the working directory.
+	absPattern := pattern
+	if workingDir != "" && !filepath.IsAbs(pattern) {
+		absPattern = filepath.Join(workingDir, pattern)
+	}
+
+	matches, err := filepath.Glob(absPattern)
+	if err != nil || len(matches) == 0 {
+		// Return the original (relative) pattern so pytest can report the error.
+		return []string{pattern}
+	}
+
+	// Convert back to paths relative to the working directory so pytest sees them
+	// the same way it would with shell expansion.
+	result := make([]string, 0, len(matches))
+
+	for _, match := range matches {
+		if workingDir != "" {
+			rel, relErr := filepath.Rel(workingDir, match)
+			if relErr == nil {
+				result = append(result, rel)
+
+				continue
+			}
+		}
+
+		result = append(result, match)
+	}
+
+	return result
 }

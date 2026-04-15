@@ -695,13 +695,21 @@
           "title": "Working directory",
           "description": "Directory to use as CWD when running pytest"
         },
-        "args": {
+        "test-paths": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "title": "Pytest arguments",
-          "description": "Arguments passed to pytest. Use {image} as a placeholder for the image path."
+          "title": "Test paths",
+          "description": "Test file paths or directories passed to pytest. Glob patterns are expanded."
+        },
+        "extra-args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Extra arguments",
+          "description": "Additional arguments passed to pytest. Use {image-path} as a placeholder for the image path."
         }
       },
       "additionalProperties": false,

@@ -4,6 +4,8 @@
 package image_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/cmds/image"
@@ -12,85 +14,138 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildNativePytestArgs_PlaceholderSubstitution(t *testing.T) {
+func TestBuildNativePytestArgs_BasicTestPaths(t *testing.T) {
+	pytestConfig := &projectconfig.PytestConfig{
+		TestPaths: []string{"cases/", "other/"},
+		ExtraArgs: []string{"--image-path", "{image-path}"},
+	}
 	options := &image.ImageTestOptions{
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(
-		[]string{"cases/", "--image-path", "{image}", "-v"},
-		options,
-	)
+	args := image.BuildNativePytestArgs(pytestConfig, options)
 
-	assert.Equal(t, []string{"cases/", "--image-path", "/images/test.raw", "-v"}, args)
+	assert.Equal(t, []string{"cases/", "other/", "--image-path", "/images/test.raw"}, args)
 }
 
-func TestBuildNativePytestArgs_NoPlaceholder(t *testing.T) {
+func TestBuildNativePytestArgs_GlobExpansion(t *testing.T) {
+	tmpDir := t.TempDir()
+	casesDir := filepath.Join(tmpDir, "cases")
+	require.NoError(t, os.MkdirAll(casesDir, 0o755))
+
+	for _, name := range []string{"test_alpha.py", "test_beta.py", "helper.py"} {
+		require.NoError(t, os.WriteFile(filepath.Join(casesDir, name), []byte("# test"), 0o600))
+	}
+
+	pytestConfig := &projectconfig.PytestConfig{
+		WorkingDir: tmpDir,
+		TestPaths:  []string{"cases/test_*.py"},
+		ExtraArgs:  []string{"--image-path", "{image-path}"},
+	}
 	options := &image.ImageTestOptions{
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(
-		[]string{"cases/", "-v"},
-		options,
-	)
+	args := image.BuildNativePytestArgs(pytestConfig, options)
 
-	assert.Equal(t, []string{"cases/", "-v"}, args)
+	assert.Contains(t, args, filepath.Join("cases", "test_alpha.py"))
+	assert.Contains(t, args, filepath.Join("cases", "test_beta.py"))
+	assert.NotContains(t, args, filepath.Join("cases", "helper.py"))
+	assert.Contains(t, args, "--image-path")
+	assert.Contains(t, args, "/images/test.raw")
+}
+
+func TestBuildNativePytestArgs_GlobNoMatch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	pytestConfig := &projectconfig.PytestConfig{
+		WorkingDir: tmpDir,
+		TestPaths:  []string{"cases/test_*.py"},
+	}
+	options := &image.ImageTestOptions{
+		ImagePath: "/images/test.raw",
+	}
+
+	args := image.BuildNativePytestArgs(pytestConfig, options)
+
+	// Original pattern preserved when no matches.
+	assert.Equal(t, []string{"cases/test_*.py"}, args)
+}
+
+func TestBuildNativePytestArgs_ExtraArgsNeverGlobExpanded(t *testing.T) {
+	pytestConfig := &projectconfig.PytestConfig{
+		ExtraArgs: []string{"--pattern", "test_*.py"},
+	}
+	options := &image.ImageTestOptions{
+		ImagePath: "/images/test.raw",
+	}
+
+	args := image.BuildNativePytestArgs(pytestConfig, options)
+
+	// Glob chars in extra-args should be passed verbatim.
+	assert.Equal(t, []string{"--pattern", "test_*.py"}, args)
 }
 
 func TestBuildNativePytestArgs_JUnitXMLAppended(t *testing.T) {
+	pytestConfig := &projectconfig.PytestConfig{
+		TestPaths: []string{"cases/"},
+		ExtraArgs: []string{"--image-path", "{image-path}"},
+	}
 	options := &image.ImageTestOptions{
 		ImagePath:    "/images/test.raw",
 		JUnitXMLPath: "/output/results.xml",
 	}
 
-	args := image.BuildNativePytestArgs(
-		[]string{"cases/", "--image-path", "{image}"},
-		options,
-	)
+	args := image.BuildNativePytestArgs(pytestConfig, options)
 
-	assert.Contains(t, args, "--junit-xml")
-	assert.Contains(t, args, "/output/results.xml")
+	assert.Equal(t, []string{
+		"cases/",
+		"--image-path", "/images/test.raw",
+		"--junit-xml", "/output/results.xml",
+	}, args)
 }
 
-func TestBuildNativePytestArgs_JUnitXMLNotDuplicated(t *testing.T) {
-	options := &image.ImageTestOptions{
-		ImagePath:    "/images/test.raw",
-		JUnitXMLPath: "/output/results.xml",
+func TestBuildNativePytestArgs_NoJUnitXMLWhenNotRequested(t *testing.T) {
+	pytestConfig := &projectconfig.PytestConfig{
+		TestPaths: []string{"cases/"},
 	}
-
-	args := image.BuildNativePytestArgs(
-		[]string{"cases/", "--junit-xml", "/other/path.xml"},
-		options,
-	)
-
-	// Should not append a duplicate --junit-xml.
-	junitCount := 0
-
-	for _, arg := range args {
-		if arg == "--junit-xml" {
-			junitCount++
-		}
-	}
-
-	assert.Equal(t, 1, junitCount, "should not duplicate --junit-xml")
-}
-
-func TestBuildNativePytestArgs_EmptyArgs(t *testing.T) {
 	options := &image.ImageTestOptions{
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(nil, options)
+	args := image.BuildNativePytestArgs(pytestConfig, options)
+
+	assert.NotContains(t, args, "--junit-xml")
+}
+
+func TestBuildNativePytestArgs_EmptyConfig(t *testing.T) {
+	pytestConfig := &projectconfig.PytestConfig{}
+	options := &image.ImageTestOptions{
+		ImagePath: "/images/test.raw",
+	}
+
+	args := image.BuildNativePytestArgs(pytestConfig, options)
 	assert.Empty(t, args)
 }
 
+func TestBuildNativePytestArgs_PlaceholderNotInTestPaths(t *testing.T) {
+	// {image-path} in test-paths should NOT be substituted (it's only for extra-args).
+	pytestConfig := &projectconfig.PytestConfig{
+		TestPaths: []string{"{image-path}"},
+	}
+	options := &image.ImageTestOptions{
+		ImagePath: "/images/test.raw",
+	}
+
+	args := image.BuildNativePytestArgs(pytestConfig, options)
+
+	assert.Equal(t, []string{"{image-path}"}, args)
+}
+
 func TestRunPytestSuite_MissingPytestConfig(t *testing.T) {
-	// Verify that the runner requires a pytest subtable.
 	testConfig := &projectconfig.TestConfig{
 		Name: "smoke",
 		Type: projectconfig.TestTypePytest,
-		// Pytest is nil.
 	}
 
 	options := &image.ImageTestOptions{

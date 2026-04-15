@@ -62,9 +62,14 @@ type PytestConfig struct {
 	// Relative paths are resolved against the config file's directory.
 	WorkingDir string `toml:"working-dir,omitempty" json:"workingDir,omitempty" jsonschema:"title=Working directory,description=Directory to use as CWD when running pytest"`
 
-	// Args is the list of arguments to pass to pytest. Use {image} as a placeholder for the
+	// TestPaths is the list of test file paths or directories to pass to pytest as positional
+	// arguments. Glob patterns (e.g., cases/test_*.py) are expanded relative to WorkingDir.
+	TestPaths []string `toml:"test-paths,omitempty" json:"testPaths,omitempty" jsonschema:"title=Test paths,description=Test file paths or directories passed to pytest. Glob patterns are expanded."`
+
+	// ExtraArgs is the list of additional arguments to pass to pytest. These are passed
+	// verbatim after placeholder substitution. Use {image-path} as a placeholder for the
 	// image path, which will be substituted at runtime.
-	Args []string `toml:"args,omitempty" json:"args,omitempty" jsonschema:"title=Pytest arguments,description=Arguments passed to pytest. Use {image} as a placeholder for the image path."`
+	ExtraArgs []string `toml:"extra-args,omitempty" json:"extraArgs,omitempty" jsonschema:"title=Extra arguments,description=Additional arguments passed to pytest. Use {image-path} as a placeholder for the image path."`
 }
 
 // LisaConfig holds configuration specific to LISA-based test suites.
@@ -142,7 +147,8 @@ func (t *TestConfig) WithAbsolutePaths(referenceDir string) *TestConfig {
 	if t.Pytest != nil {
 		result.Pytest = &PytestConfig{
 			WorkingDir: makeAbsolute(referenceDir, t.Pytest.WorkingDir),
-			Args:       t.Pytest.Args,
+			TestPaths:  t.Pytest.TestPaths,
+			ExtraArgs:  t.Pytest.ExtraArgs,
 		}
 	}
 

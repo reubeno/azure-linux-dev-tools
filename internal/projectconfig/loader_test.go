@@ -807,7 +807,8 @@ description = "Smoke tests for images"
 
 [tests.smoke.pytest]
 working-dir = "tests"
-args = ["cases/", "--image-path", "{image}"]
+test-paths = ["cases/test_*.py"]
+extra-args = ["--image-path", "{image-path}"]
 
 [tests.integration]
 type = "lisa"
@@ -836,7 +837,8 @@ admin-private-key-path = "keys/admin"
 		assert.Equal(t, "Smoke tests for images", smokeTest.Description)
 		require.NotNil(t, smokeTest.Pytest)
 		assert.Equal(t, filepath.Join(configDir, "tests"), smokeTest.Pytest.WorkingDir)
-		assert.Equal(t, []string{"cases/", "--image-path", "{image}"}, smokeTest.Pytest.Args)
+		assert.Equal(t, []string{"cases/test_*.py"}, smokeTest.Pytest.TestPaths)
+		assert.Equal(t, []string{"--image-path", "{image-path}"}, smokeTest.Pytest.ExtraArgs)
 	}
 
 	// Check LISA test.
@@ -863,14 +865,14 @@ includes = ["include.toml"]
 type = "pytest"
 
 [tests.smoke.pytest]
-working-dir = "tests"
+test-paths = ["cases/"]
 `},
 		{"/project/include.toml", `
 [tests.smoke]
 type = "pytest"
 
 [tests.smoke.pytest]
-working-dir = "other"
+test-paths = ["other/"]
 `},
 	}
 
@@ -920,7 +922,7 @@ func TestLoadAndResolveProjectConfig_ImageWithValidTestRef(t *testing.T) {
 type = "pytest"
 
 [tests.smoke.pytest]
-working-dir = "tests"
+test-paths = ["cases/"]
 
 [images.myimage]
 description = "Test image"
