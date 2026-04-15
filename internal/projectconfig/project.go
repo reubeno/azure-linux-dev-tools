@@ -102,7 +102,7 @@ func validatePackageGroupMembership(groups map[string]PackageGroupConfig) error 
 // field corresponds to a defined entry in the top-level Tests map.
 func validateImageTestReferences(images map[string]ImageConfig, tests map[string]TestConfig) error {
 	for imageName, image := range images {
-		for _, testName := range image.Tests {
+		for _, testName := range image.TestNames() {
 			if _, ok := tests[testName]; !ok {
 				return fmt.Errorf(
 					"%w: image %#q references test %#q, which is not defined in [tests]",

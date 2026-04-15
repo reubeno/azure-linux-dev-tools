@@ -25,9 +25,28 @@ type ImageConfig struct {
 	// Where to find its definition.
 	Definition ImageDefinition `toml:"definition,omitempty" json:"definition,omitempty" jsonschema:"title=Definition,description=Identifies where to find the definition for this image"`
 
-	// Tests lists the names of test suites (defined in the top-level [tests] section)
-	// that apply to this image.
-	Tests []string `toml:"tests,omitempty" json:"tests,omitempty" jsonschema:"title=Tests,description=List of test suite names that apply to this image"`
+	// Tests lists the test suite references that apply to this image. Each reference
+	// identifies a test suite defined in the top-level [tests] section and may carry
+	// per-test metadata in the future (e.g., required vs optional).
+	Tests []ImageTestRef `toml:"tests,omitempty" json:"tests,omitempty" jsonschema:"title=Tests,description=List of test suite references that apply to this image"`
+}
+
+// ImageTestRef is a reference from an image to a named test suite. Using a structured
+// type (rather than a bare string) allows per-test metadata to be added later without
+// a breaking config change.
+type ImageTestRef struct {
+	// Name is the key into the top-level [tests] map.
+	Name string `toml:"name" json:"name" jsonschema:"required,title=Name,description=Name of the test suite (must match a key in [tests])"`
+}
+
+// TestNames returns the test suite names referenced by this image.
+func (i *ImageConfig) TestNames() []string {
+	names := make([]string, len(i.Tests))
+	for idx, ref := range i.Tests {
+		names[idx] = ref.Name
+	}
+
+	return names
 }
 
 // Defines where to find an image definition.

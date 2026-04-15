@@ -168,7 +168,7 @@ func TestValidateImageTestReferences(t *testing.T) {
 			Images: map[string]projectconfig.ImageConfig{
 				"myimage": {
 					Name:  "myimage",
-					Tests: []string{"smoke"},
+					Tests: []projectconfig.ImageTestRef{{Name: "smoke"}},
 				},
 			},
 			Tests: map[string]projectconfig.TestConfig{
@@ -194,7 +194,7 @@ func TestValidateImageTestReferences(t *testing.T) {
 			Images: map[string]projectconfig.ImageConfig{
 				"myimage": {
 					Name:  "myimage",
-					Tests: []string{"nonexistent"},
+					Tests: []projectconfig.ImageTestRef{{Name: "nonexistent"}},
 				},
 			},
 			Tests:             make(map[string]projectconfig.TestConfig),

@@ -342,6 +342,14 @@
           "type": "object",
           "title": "Package groups",
           "description": "Definitions of package groups for shared binary package configuration"
+        },
+        "tests": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TestConfig"
+          },
+          "type": "object",
+          "title": "Tests",
+          "description": "Definitions of test suites for this project"
         }
       },
       "additionalProperties": false,
@@ -476,6 +484,14 @@
           "$ref": "#/$defs/ImageDefinition",
           "title": "Definition",
           "description": "Identifies where to find the definition for this image"
+        },
+        "tests": {
+          "items": {
+            "$ref": "#/$defs/ImageTestRef"
+          },
+          "type": "array",
+          "title": "Tests",
+          "description": "List of test suite references that apply to this image"
         }
       },
       "additionalProperties": false,
@@ -512,6 +528,40 @@
       },
       "additionalProperties": false,
       "type": "object"
+    },
+    "ImageTestRef": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "Name",
+          "description": "Name of the test suite (must match a key in [tests])"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    },
+    "LisaConfig": {
+      "properties": {
+        "runbook": {
+          "type": "string",
+          "title": "Runbook path",
+          "description": "Path to the LISA runbook file"
+        },
+        "admin-private-key-path": {
+          "type": "string",
+          "title": "Admin private key path",
+          "description": "Path to the admin SSH private key file"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "runbook",
+        "admin-private-key-path"
+      ]
     },
     "Origin": {
       "properties": {
@@ -638,6 +688,25 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "PytestConfig": {
+      "properties": {
+        "working-dir": {
+          "type": "string",
+          "title": "Working directory",
+          "description": "Directory to use as CWD when running pytest"
+        },
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Pytest arguments",
+          "description": "Arguments passed to pytest. Use {image} as a placeholder for the image path."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "SourceFileReference": {
       "properties": {
         "filename": {
@@ -702,6 +771,38 @@
           "examples": [
             "abc1234def5678"
           ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "TestConfig": {
+      "properties": {
+        "description": {
+          "type": "string",
+          "title": "Description",
+          "description": "Description of this test suite"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "pytest lisa"
+          ],
+          "title": "Type",
+          "description": "Type of test framework (pytest or lisa)"
+        },
+        "pytest": {
+          "$ref": "#/$defs/PytestConfig",
+          "title": "Pytest config",
+          "description": "Pytest-specific configuration (required when type is pytest)"
+        },
+        "lisa": {
+          "$ref": "#/$defs/LisaConfig",
+          "title": "LISA config",
+          "description": "LISA-specific configuration (required when type is lisa)"
         }
       },
       "additionalProperties": false,

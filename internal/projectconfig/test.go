@@ -155,10 +155,3 @@ func (t *TestConfig) WithAbsolutePaths(referenceDir string) *TestConfig {
 
 	return result
 }
-
-// ImageTestsConfig holds the test references for an image.
-type ImageTestsConfig struct {
-	// Tests is the list of test names (referencing top-level [tests.*] entries) that
-	// apply to this image.
-	Tests []string `toml:"tests,omitempty" json:"tests,omitempty" jsonschema:"title=Tests,description=List of test suite names that apply to this image"`
-}

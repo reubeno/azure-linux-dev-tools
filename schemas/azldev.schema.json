@@ -487,11 +487,11 @@
         },
         "tests": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/ImageTestRef"
           },
           "type": "array",
           "title": "Tests",
-          "description": "List of test suite names that apply to this image"
+          "description": "List of test suite references that apply to this image"
         }
       },
       "additionalProperties": false,
@@ -528,6 +528,40 @@
       },
       "additionalProperties": false,
       "type": "object"
+    },
+    "ImageTestRef": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "Name",
+          "description": "Name of the test suite (must match a key in [tests])"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    },
+    "LisaConfig": {
+      "properties": {
+        "runbook": {
+          "type": "string",
+          "title": "Runbook path",
+          "description": "Path to the LISA runbook file"
+        },
+        "admin-private-key-path": {
+          "type": "string",
+          "title": "Admin private key path",
+          "description": "Path to the admin SSH private key file"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "runbook",
+        "admin-private-key-path"
+      ]
     },
     "Origin": {
       "properties": {
@@ -654,6 +688,25 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "PytestConfig": {
+      "properties": {
+        "working-dir": {
+          "type": "string",
+          "title": "Working directory",
+          "description": "Directory to use as CWD when running pytest"
+        },
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Pytest arguments",
+          "description": "Arguments passed to pytest. Use {image} as a placeholder for the image path."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "SourceFileReference": {
       "properties": {
         "filename": {
@@ -741,28 +794,15 @@
           "title": "Type",
           "description": "Type of test framework (pytest or lisa)"
         },
-        "test-dir": {
-          "type": "string",
-          "title": "Test directory",
-          "description": "Path to the directory containing pytest test files (required for pytest type)"
+        "pytest": {
+          "$ref": "#/$defs/PytestConfig",
+          "title": "Pytest config",
+          "description": "Pytest-specific configuration (required when type is pytest)"
         },
-        "runbook": {
-          "type": "string",
-          "title": "Runbook path",
-          "description": "Path to the LISA runbook file (required for lisa type)"
-        },
-        "admin-private-key-path": {
-          "type": "string",
-          "title": "Admin private key path",
-          "description": "Path to the admin SSH private key file (required for lisa type)"
-        },
-        "mock-packages": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "title": "Mock packages",
-          "description": "Additional RPM packages to install in the mock chroot for pytest tests"
+        "lisa": {
+          "$ref": "#/$defs/LisaConfig",
+          "title": "LISA config",
+          "description": "LISA-specific configuration (required when type is lisa)"
         }
       },
       "additionalProperties": false,

@@ -924,7 +924,7 @@ working-dir = "tests"
 
 [images.myimage]
 description = "Test image"
-tests = ["smoke"]
+tests = [{ name = "smoke" }]
 `
 
 	ctx := testctx.NewCtx()
@@ -934,7 +934,7 @@ tests = ["smoke"]
 	require.NoError(t, err)
 
 	if assert.Contains(t, config.Images, "myimage") {
-		assert.Equal(t, []string{"smoke"}, config.Images["myimage"].Tests)
+		assert.Equal(t, []ImageTestRef{{Name: "smoke"}}, config.Images["myimage"].Tests)
 	}
 }
 
@@ -942,7 +942,7 @@ func TestLoadAndResolveProjectConfig_ImageWithInvalidTestRef(t *testing.T) {
 	const configContents = `
 [images.myimage]
 description = "Test image"
-tests = ["nonexistent"]
+tests = [{ name = "nonexistent" }]
 `
 
 	ctx := testctx.NewCtx()
