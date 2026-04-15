@@ -23,8 +23,8 @@ func TestNewImageTestCmd_Flags(t *testing.T) {
 
 	assert.NotNil(t, cmd.Flags().Lookup("name"))
 	assert.NotNil(t, cmd.Flags().Lookup("image-path"))
-	assert.NotNil(t, cmd.Flags().Lookup("manifest"))
 	assert.NotNil(t, cmd.Flags().Lookup("junit-xml"))
+	assert.Nil(t, cmd.Flags().Lookup("manifest"), "manifest flag should have been removed")
 }
 
 func TestCheckTestRunner_UnsupportedRunner(t *testing.T) {

@@ -29,6 +29,9 @@ var (
 	ErrMissingTestField = errors.New("missing required test field")
 	// ErrUndefinedTest is returned when an image references a test name that is not defined.
 	ErrUndefinedTest = errors.New("undefined test reference")
+	// ErrMismatchedTestSubtable is returned when a test config has a subtable that does not
+	// match its declared type.
+	ErrMismatchedTestSubtable = errors.New("mismatched test subtable")
 )
 
 // TestConfig defines a named test suite.
@@ -42,45 +45,71 @@ type TestConfig struct {
 	// Type indicates the test framework to use.
 	Type TestType `toml:"type" json:"type" jsonschema:"required,enum=pytest lisa,title=Type,description=Type of test framework (pytest or lisa)"`
 
-	// TestDir is the path to the directory containing pytest test files.
-	// Required when Type is "pytest".
-	TestDir string `toml:"test-dir,omitempty" json:"testDir,omitempty" jsonschema:"title=Test directory,description=Path to the directory containing pytest test files (required for pytest type)"`
+	// Pytest holds pytest-specific configuration. Required when Type is "pytest".
+	Pytest *PytestConfig `toml:"pytest,omitempty" json:"pytest,omitempty" jsonschema:"title=Pytest config,description=Pytest-specific configuration (required when type is pytest)"`
 
-	// RunbookPath is the path to a LISA runbook YAML file.
-	// Required when Type is "lisa".
-	RunbookPath string `toml:"runbook,omitempty" json:"runbook,omitempty" jsonschema:"title=Runbook path,description=Path to the LISA runbook file (required for lisa type)"`
-
-	// AdminPrivateKeyPath is the path to the admin SSH private key file for LISA.
-	// Required when Type is "lisa".
-	AdminPrivateKeyPath string `toml:"admin-private-key-path,omitempty" json:"adminPrivateKeyPath,omitempty" jsonschema:"title=Admin private key path,description=Path to the admin SSH private key file (required for lisa type)"`
-
-	// MockPackages lists additional RPM packages to install in the mock chroot
-	// before running pytest tests.
-	MockPackages []string `toml:"mock-packages,omitempty" json:"mockPackages,omitempty" jsonschema:"title=Mock packages,description=Additional RPM packages to install in the mock chroot for pytest tests"`
+	// Lisa holds LISA-specific configuration. Required when Type is "lisa".
+	Lisa *LisaConfig `toml:"lisa,omitempty" json:"lisa,omitempty" jsonschema:"title=LISA config,description=LISA-specific configuration (required when type is lisa)"`
 
 	// Reference to the source config file that this definition came from; not present
 	// in serialized files.
 	SourceConfigFile *ConfigFile `toml:"-" json:"-" table:"-"`
 }
 
-// Validate checks that the test config has valid type-specific required fields.
+// PytestConfig holds configuration specific to pytest-based test suites.
+type PytestConfig struct {
+	// WorkingDir is the directory to use as the current working directory when running pytest.
+	// Relative paths are resolved against the config file's directory.
+	WorkingDir string `toml:"working-dir,omitempty" json:"workingDir,omitempty" jsonschema:"title=Working directory,description=Directory to use as CWD when running pytest"`
+
+	// Args is the list of arguments to pass to pytest. Use {image} as a placeholder for the
+	// image path, which will be substituted at runtime.
+	Args []string `toml:"args,omitempty" json:"args,omitempty" jsonschema:"title=Pytest arguments,description=Arguments passed to pytest. Use {image} as a placeholder for the image path."`
+}
+
+// LisaConfig holds configuration specific to LISA-based test suites.
+type LisaConfig struct {
+	// RunbookPath is the path to a LISA runbook YAML file.
+	RunbookPath string `toml:"runbook" json:"runbook" jsonschema:"required,title=Runbook path,description=Path to the LISA runbook file"`
+
+	// AdminPrivateKeyPath is the path to the admin SSH private key file for LISA.
+	AdminPrivateKeyPath string `toml:"admin-private-key-path" json:"adminPrivateKeyPath" jsonschema:"required,title=Admin private key path,description=Path to the admin SSH private key file"`
+}
+
+// Validate checks that the test config has valid type-specific required fields and that
+// only the matching subtable is present.
 func (t *TestConfig) Validate() error {
 	switch t.Type {
 	case TestTypePytest:
-		if t.TestDir == "" {
-			return fmt.Errorf("%w: test %#q of type %#q requires 'test-dir'",
+		if t.Pytest == nil {
+			return fmt.Errorf("%w: test %#q of type %#q requires a [pytest] subtable",
 				ErrMissingTestField, t.Name, t.Type)
 		}
 
+		if t.Lisa != nil {
+			return fmt.Errorf("%w: test %#q of type %#q must not have a [lisa] subtable",
+				ErrMismatchedTestSubtable, t.Name, t.Type)
+		}
+
 	case TestTypeLisa:
-		if t.RunbookPath == "" {
+		if t.Lisa == nil {
+			return fmt.Errorf("%w: test %#q of type %#q requires a [lisa] subtable",
+				ErrMissingTestField, t.Name, t.Type)
+		}
+
+		if t.Lisa.RunbookPath == "" {
 			return fmt.Errorf("%w: test %#q of type %#q requires 'runbook'",
 				ErrMissingTestField, t.Name, t.Type)
 		}
 
-		if t.AdminPrivateKeyPath == "" {
+		if t.Lisa.AdminPrivateKeyPath == "" {
 			return fmt.Errorf("%w: test %#q of type %#q requires 'admin-private-key-path'",
 				ErrMissingTestField, t.Name, t.Type)
+		}
+
+		if t.Pytest != nil {
+			return fmt.Errorf("%w: test %#q of type %#q must not have a [pytest] subtable",
+				ErrMismatchedTestSubtable, t.Name, t.Type)
 		}
 
 	default:
@@ -104,14 +133,24 @@ func (t *TestConfig) MergeUpdatesFrom(other *TestConfig) error {
 // to absolute paths (relative to referenceDir).
 func (t *TestConfig) WithAbsolutePaths(referenceDir string) *TestConfig {
 	result := &TestConfig{
-		Name:                t.Name,
-		Description:         t.Description,
-		Type:                t.Type,
-		TestDir:             makeAbsolute(referenceDir, t.TestDir),
-		RunbookPath:         makeAbsolute(referenceDir, t.RunbookPath),
-		AdminPrivateKeyPath: makeAbsolute(referenceDir, t.AdminPrivateKeyPath),
-		MockPackages:        t.MockPackages,
-		SourceConfigFile:    t.SourceConfigFile,
+		Name:             t.Name,
+		Description:      t.Description,
+		Type:             t.Type,
+		SourceConfigFile: t.SourceConfigFile,
+	}
+
+	if t.Pytest != nil {
+		result.Pytest = &PytestConfig{
+			WorkingDir: makeAbsolute(referenceDir, t.Pytest.WorkingDir),
+			Args:       t.Pytest.Args,
+		}
+	}
+
+	if t.Lisa != nil {
+		result.Lisa = &LisaConfig{
+			RunbookPath:         makeAbsolute(referenceDir, t.Lisa.RunbookPath),
+			AdminPrivateKeyPath: makeAbsolute(referenceDir, t.Lisa.AdminPrivateKeyPath),
+		}
 	}
 
 	return result

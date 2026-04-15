@@ -803,15 +803,19 @@ func TestLoadAndResolveProjectConfig_TestSuite(t *testing.T) {
 	const configContents = `
 [tests.smoke]
 type = "pytest"
-test-dir = "checks/smoke"
 description = "Smoke tests for images"
-mock-packages = ["libguestfs-tools"]
+
+[tests.smoke.pytest]
+working-dir = "tests"
+args = ["cases/", "--image-path", "{image}"]
 
 [tests.integration]
 type = "lisa"
+description = "LISA integration tests"
+
+[tests.integration.lisa]
 runbook = "runbooks/basic.yml"
 admin-private-key-path = "keys/admin"
-description = "LISA integration tests"
 `
 
 	configDir := filepath.Dir(testConfigPath)
@@ -829,9 +833,10 @@ description = "LISA integration tests"
 		smokeTest := config.Tests["smoke"]
 		assert.Equal(t, "smoke", smokeTest.Name)
 		assert.Equal(t, TestTypePytest, smokeTest.Type)
-		assert.Equal(t, filepath.Join(configDir, "checks/smoke"), smokeTest.TestDir)
 		assert.Equal(t, "Smoke tests for images", smokeTest.Description)
-		assert.Equal(t, []string{"libguestfs-tools"}, smokeTest.MockPackages)
+		require.NotNil(t, smokeTest.Pytest)
+		assert.Equal(t, filepath.Join(configDir, "tests"), smokeTest.Pytest.WorkingDir)
+		assert.Equal(t, []string{"cases/", "--image-path", "{image}"}, smokeTest.Pytest.Args)
 	}
 
 	// Check LISA test.
@@ -839,9 +844,10 @@ description = "LISA integration tests"
 		lisaTest := config.Tests["integration"]
 		assert.Equal(t, "integration", lisaTest.Name)
 		assert.Equal(t, TestTypeLisa, lisaTest.Type)
-		assert.Equal(t, filepath.Join(configDir, "runbooks/basic.yml"), lisaTest.RunbookPath)
-		assert.Equal(t, filepath.Join(configDir, "keys/admin"), lisaTest.AdminPrivateKeyPath)
 		assert.Equal(t, "LISA integration tests", lisaTest.Description)
+		require.NotNil(t, lisaTest.Lisa)
+		assert.Equal(t, filepath.Join(configDir, "runbooks/basic.yml"), lisaTest.Lisa.RunbookPath)
+		assert.Equal(t, filepath.Join(configDir, "keys/admin"), lisaTest.Lisa.AdminPrivateKeyPath)
 	}
 }
 
@@ -855,12 +861,16 @@ includes = ["include.toml"]
 
 [tests.smoke]
 type = "pytest"
-test-dir = "checks/smoke"
+
+[tests.smoke.pytest]
+working-dir = "tests"
 `},
 		{"/project/include.toml", `
 [tests.smoke]
 type = "pytest"
-test-dir = "checks/other"
+
+[tests.smoke.pytest]
+working-dir = "other"
 `},
 	}
 
@@ -879,7 +889,6 @@ func TestLoadAndResolveProjectConfig_InvalidTestType(t *testing.T) {
 	const configContents = `
 [tests.bad]
 type = "unsupported"
-test-dir = "checks/bad"
 `
 
 	ctx := testctx.NewCtx()
@@ -894,7 +903,7 @@ func TestLoadAndResolveProjectConfig_TestMissingRequiredField(t *testing.T) {
 	const configContents = `
 [tests.smoke]
 type = "pytest"
-# Missing test-dir
+# Missing [tests.smoke.pytest] subtable
 `
 
 	ctx := testctx.NewCtx()
@@ -909,7 +918,9 @@ func TestLoadAndResolveProjectConfig_ImageWithValidTestRef(t *testing.T) {
 	const configContents = `
 [tests.smoke]
 type = "pytest"
-test-dir = "checks/smoke"
+
+[tests.smoke.pytest]
+working-dir = "tests"
 
 [images.myimage]
 description = "Test image"

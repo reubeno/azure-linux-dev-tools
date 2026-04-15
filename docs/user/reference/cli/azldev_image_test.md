@@ -11,11 +11,11 @@ project configuration.
 
 Test suites are defined in the [tests] section of azldev.toml and referenced
 by images via the 'tests' field. Each test suite specifies a type (pytest or
-lisa) and framework-specific configuration.
+lisa) and framework-specific configuration in a matching subtable.
 
-For pytest tests, the test runner executes inside a mock chroot with
-pre-installed dependencies. The image file and test directory are bind-mounted
-into the chroot.
+For pytest tests, azldev creates a Python virtual environment, installs
+dependencies from pyproject.toml in the working directory, and runs pytest
+with the configured arguments. Use {image} in the args to insert the image path.
 
 For LISA tests, the test runner executes on the host and boots the image in a
 QEMU VM.
@@ -28,16 +28,13 @@ azldev image test [flags]
 
 ```
   # Run a pytest-based test suite
-  azldev image test --name smoke --image-path ./out/image.qcow2
-
-  # Run with a kiwi manifest for package validation
-  azldev image test --name smoke --image-path ./out/image.qcow2 --manifest ./out/image.packages
+  azldev image test --name smoke --image-path ./out/image.raw
 
   # Run a LISA-based test suite
   azldev image test --name integration --image-path ./out/image.qcow2
 
-  # Generate JUnit XML output (pytest only)
-  azldev image test --name smoke --image-path ./out/image.qcow2 --junit-xml results.xml
+  # Generate JUnit XML output
+  azldev image test --name smoke --image-path ./out/image.raw --junit-xml results.xml
 ```
 
 ### Options
@@ -45,8 +42,7 @@ azldev image test [flags]
 ```
   -h, --help                help for test
   -i, --image-path string   Path to the disk image file to test
-      --junit-xml string    Path for writing JUnit XML output (pytest only)
-      --manifest string     Path to a kiwi .packages manifest file (optional, for pytest tests)
+      --junit-xml string    Path for writing JUnit XML output
       --name string         Name of the test suite (as defined in [tests] section of azldev.toml)
 ```
 

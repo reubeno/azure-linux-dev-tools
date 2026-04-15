@@ -4,85 +4,87 @@
 package image
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
-	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/buildenvfactory"
-	"github.com/microsoft/azure-linux-dev-tools/internal/buildenv"
-	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
-	"github.com/microsoft/azure-linux-dev-tools/internal/rpm/mock"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
-	pytestfixtures "github.com/microsoft/azure-linux-dev-tools/python"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/prereqs"
 )
 
 const (
-	// Paths inside the mock chroot where artifacts are bind-mounted.
-	mockTestDir     = "/azldev-tests"
-	mockImagePath   = "/azldev-image"
-	mockFixturesDir = "/azldev-fixtures"
-	mockConfigDir   = "/azldev-config"
-	mockManifestDir = "/azldev-manifest"
+	// pythonProgram is the Python interpreter used to create venvs and run pytest.
+	pythonProgram = "python3"
 
-	// Base packages required for running pytest in a mock chroot.
-	pytestPackage = "python3-pytest"
+	// venvDirName is the name of the venv directory created under the azldev work dir.
+	venvDirName = "pytest-venv"
+
+	// imagePlaceholder is the placeholder token in pytest args that gets replaced with the
+	// actual image path at runtime.
+	imagePlaceholder = "{image}"
 )
 
-// runPytestSuite runs a pytest-based test suite inside a mock chroot.
-func runPytestSuite(
+// RunPytestSuite runs a pytest-based test suite natively using a Python venv.
+func RunPytestSuite(
 	env *azldev.Env, testConfig *projectconfig.TestConfig, options *ImageTestOptions,
 ) error {
+	pytestConfig := testConfig.Pytest
+	if pytestConfig == nil {
+		return fmt.Errorf("test %#q is missing pytest configuration", testConfig.Name)
+	}
+
 	slog.Info("Running pytest test suite",
 		slog.String("name", testConfig.Name),
-		slog.String("test-dir", testConfig.TestDir),
+		slog.String("working-dir", pytestConfig.WorkingDir),
 		slog.String("image-path", options.ImagePath),
 	)
 
-	// Validate that the test directory exists.
-	testDirExists, err := fileutils.DirExists(env.FS(), testConfig.TestDir)
-	if err != nil {
-		return fmt.Errorf("cannot access test directory %#q:\n%w", testConfig.TestDir, err)
+	// Validate that the working directory exists.
+	if pytestConfig.WorkingDir != "" {
+		workingDirExists, err := fileutils.DirExists(env.FS(), pytestConfig.WorkingDir)
+		if err != nil {
+			return fmt.Errorf("cannot access working directory %#q:\n%w", pytestConfig.WorkingDir, err)
+		}
+
+		if !workingDirExists {
+			return fmt.Errorf("working directory not found: %#q", pytestConfig.WorkingDir)
+		}
 	}
 
-	if !testDirExists {
-		return fmt.Errorf("test directory not found: %#q", testConfig.TestDir)
+	// Ensure python3 is available.
+	if err := prereqs.RequireExecutable(env, pythonProgram, nil); err != nil {
+		return fmt.Errorf("python3 is required to run pytest tests:\n%w", err)
 	}
 
-	// Set up the mock runner.
-	runner, err := makePytestMockRunner(env)
-	if err != nil {
-		return err
-	}
-
-	// Install required packages in the mock chroot.
-	packagesToInstall := []string{pytestPackage}
-	packagesToInstall = append(packagesToInstall, testConfig.MockPackages...)
-
-	slog.Info("Installing packages in mock chroot", slog.Any("packages", packagesToInstall))
-
-	if err := runner.InstallPackages(env, packagesToInstall); err != nil {
-		return fmt.Errorf("failed to install packages in mock chroot:\n%w", err)
-	}
-
-	// Configure bind mounts and build the pytest arguments.
-	pytestArgs, err := preparePytestEnvironment(env, runner, testConfig, options)
+	// Set up or reuse the venv.
+	venvDir, err := ensurePytestVenv(env, testConfig.Name, pytestConfig.WorkingDir)
 	if err != nil {
 		return err
 	}
 
-	slog.Info("Running pytest in mock chroot", slog.Any("args", pytestArgs))
+	// Build the pytest command with placeholder substitution.
+	pytestArgs := BuildNativePytestArgs(pytestConfig.Args, options)
 
-	cmd, err := runner.CmdInChroot(env, pytestArgs, false /*interactive*/)
+	slog.Info("Running pytest", slog.Any("args", pytestArgs))
+
+	venvPython := filepath.Join(venvDir, "bin", pythonProgram)
+
+	cmdArgs := append([]string{"-m", "pytest"}, pytestArgs...)
+
+	pytestCmd := exec.CommandContext(env, venvPython, cmdArgs...)
+	pytestCmd.Dir = pytestConfig.WorkingDir
+	pytestCmd.Stdout = os.Stdout
+	pytestCmd.Stderr = os.Stderr
+
+	cmd, err := env.Command(pytestCmd)
 	if err != nil {
 		return fmt.Errorf("failed to create pytest command:\n%w", err)
 	}
-
-	cmd.SetStdout(os.Stdout)
-	cmd.SetStderr(os.Stderr)
 
 	if err := cmd.Run(env); err != nil {
 		return fmt.Errorf("pytest run failed:\n%w", err)
@@ -91,204 +93,126 @@ func runPytestSuite(
 	return nil
 }
 
-// preparePytestEnvironment sets up bind mounts for the mock chroot and returns the
-// constructed pytest command-line arguments.
-func preparePytestEnvironment(
-	env *azldev.Env, runner *mock.Runner,
-	testConfig *projectconfig.TestConfig, options *ImageTestOptions,
-) ([]string, error) {
-	// Bind-mount the test directory.
-	runner.AddBindMount(testConfig.TestDir, mockTestDir)
+// ensurePytestVenv creates or reuses a Python venv for the given test suite and installs
+// dependencies from the working directory's pyproject.toml (if present). The venv is
+// created under the project's work directory.
+func ensurePytestVenv(env *azldev.Env, testName string, workingDir string) (string, error) {
+	venvDir := filepath.Join(env.WorkDir(), venvDirName, testName)
 
-	// Bind-mount the image file. Resolve symlinks first because kiwi output
-	// directories often contain symlinks back to the work directory, and the
-	// symlink targets are not visible inside the mock chroot.
-	absImagePath, err := filepath.Abs(options.ImagePath)
+	venvPython := filepath.Join(venvDir, "bin", pythonProgram)
+
+	venvExists, err := fileutils.Exists(env.FS(), venvPython)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve absolute path for image %#q:\n%w", options.ImagePath, err)
+		return "", fmt.Errorf("cannot check venv at %#q:\n%w", venvDir, err)
 	}
 
-	realImagePath, err := filepath.EvalSymlinks(absImagePath)
+	if !venvExists {
+		if err := createPythonVenv(env, venvDir); err != nil {
+			return "", err
+		}
+	} else {
+		slog.Info("Reusing existing Python venv", slog.String("path", venvDir))
+	}
+
+	// Always refresh dependencies if a pyproject.toml exists in the working directory.
+	if err := installPytestDependencies(env, venvPython, workingDir); err != nil {
+		return "", err
+	}
+
+	return venvDir, nil
+}
+
+// createPythonVenv creates a new Python virtual environment at venvDir.
+func createPythonVenv(env *azldev.Env, venvDir string) error {
+	slog.Info("Creating Python venv", slog.String("path", venvDir))
+
+	venvCmd := exec.CommandContext(env, pythonProgram, "-m", "venv", venvDir)
+	venvCmd.Stdout = os.Stdout
+	venvCmd.Stderr = os.Stderr
+
+	cmd, err := env.Command(venvCmd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve symlinks for image %#q:\n%w", absImagePath, err)
+		return fmt.Errorf("failed to create venv command:\n%w", err)
 	}
 
-	imageFileName := filepath.Base(realImagePath)
-	mockImageFilePath := filepath.Join(mockImagePath, imageFileName)
-	runner.AddBindMount(filepath.Dir(realImagePath), mockImagePath)
+	if err := cmd.Run(env); err != nil {
+		return fmt.Errorf("failed to create Python venv at %#q:\n%w", venvDir, err)
+	}
 
-	// Extract and bind-mount the Python fixtures.
-	fixturesDir, err := extractPytestFixtures(env.FS(), env.WorkDir())
+	return nil
+}
+
+// installPytestDependencies installs dependencies from pyproject.toml (if present) into the
+// given venv Python interpreter.
+func installPytestDependencies(env *azldev.Env, venvPython string, workingDir string) error {
+	if workingDir == "" {
+		return nil
+	}
+
+	pyprojectPath := filepath.Join(workingDir, "pyproject.toml")
+
+	pyprojectExists, err := fileutils.Exists(env.FS(), pyprojectPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract pytest fixtures:\n%w", err)
+		return fmt.Errorf("cannot check for pyproject.toml at %#q:\n%w", pyprojectPath, err)
 	}
 
-	runner.AddBindMount(fixturesDir, mockFixturesDir)
-
-	// Serialize image config to JSON and bind-mount it.
-	configJSONPath := ""
-
-	imageConfig, err := findImageForTest(env, testConfig.Name)
-	if err != nil {
-		slog.Warn("Could not resolve image config for test context; proceeding without it",
-			slog.String("test", testConfig.Name),
-			slog.Any("error", err),
-		)
+	if !pyprojectExists {
+		return nil
 	}
 
-	if imageConfig != nil {
-		configJSONPath, err = mountImageConfig(env, runner, imageConfig)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// If a manifest was provided, resolve its path inside the mock chroot.
-	// If the manifest is in the same directory as the image, reuse the existing
-	// /azldev-image mount rather than creating a duplicate bind mount for the
-	// same host directory (which mock may silently ignore).
-	mockManifestFilePath := ""
-
-	if options.ManifestPath != "" {
-		absManifestPath, err := filepath.Abs(options.ManifestPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve absolute path for manifest %#q:\n%w",
-				options.ManifestPath, err)
-		}
-
-		realManifestPath, err := filepath.EvalSymlinks(absManifestPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve symlinks for manifest %#q:\n%w",
-				absManifestPath, err)
-		}
-
-		manifestFileName := filepath.Base(realManifestPath)
-		manifestDir := filepath.Dir(realManifestPath)
-		imageDir := filepath.Dir(realImagePath)
-
-		if manifestDir == imageDir {
-			// Same directory — reference via the already-mounted /azldev-image.
-			mockManifestFilePath = filepath.Join(mockImagePath, manifestFileName)
-		} else {
-			mockManifestFilePath = filepath.Join(mockManifestDir, manifestFileName)
-			runner.AddBindMount(manifestDir, mockManifestDir)
-		}
-	}
-
-	// Build the pytest command arguments.
-	pytestArgs := BuildPytestArgs(
-		mockTestDir,
-		mockImageFilePath,
-		configJSONPath,
-		mockManifestFilePath,
-		options.JUnitXMLPath,
-		mockFixturesDir,
+	slog.Info("Installing dependencies from pyproject.toml",
+		slog.String("pyproject", pyprojectPath),
 	)
 
-	return pytestArgs, nil
+	pipCmd := exec.CommandContext(
+		env, venvPython, "-m", "pip", "install", "--quiet", "-e", workingDir,
+	)
+	pipCmd.Stdout = os.Stdout
+	pipCmd.Stderr = os.Stderr
+
+	cmd, err := env.Command(pipCmd)
+	if err != nil {
+		return fmt.Errorf("failed to create pip install command:\n%w", err)
+	}
+
+	if err := cmd.Run(env); err != nil {
+		return fmt.Errorf("failed to install dependencies from %#q:\n%w", pyprojectPath, err)
+	}
+
+	return nil
 }
 
-// mountImageConfig serializes the image config to JSON in a temp directory and
-// bind-mounts that directory into the mock chroot.
-func mountImageConfig(
-	env *azldev.Env, runner *mock.Runner, imageConfig *projectconfig.ImageConfig,
-) (string, error) {
-	configDir, err := fileutils.MkdirTemp(env.FS(), env.WorkDir(), "azldev-test-config-")
+// BuildNativePytestArgs constructs pytest arguments by substituting placeholders in the
+// configured args with actual runtime values.
+func BuildNativePytestArgs(configArgs []string, options *ImageTestOptions) []string {
+	absImagePath, err := filepath.Abs(options.ImagePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp dir for config:\n%w", err)
+		// Fall back to the original path if Abs fails.
+		absImagePath = options.ImagePath
 	}
 
-	configJSONPath, err := SerializeImageConfigToJSON(env.FS(), imageConfig, configDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to serialize image config:\n%w", err)
+	args := make([]string, 0, len(configArgs))
+
+	for _, arg := range configArgs {
+		args = append(args, strings.ReplaceAll(arg, imagePlaceholder, absImagePath))
 	}
 
-	runner.AddBindMount(configDir, mockConfigDir)
+	// Append --junit-xml if requested and not already present in the args.
+	if options.JUnitXMLPath != "" {
+		hasJUnitXML := false
 
-	return configJSONPath, nil
-}
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "--junit-xml") {
+				hasJUnitXML = true
 
-// BuildPytestArgs constructs the command-line arguments for running pytest inside the mock chroot.
-func BuildPytestArgs(
-	testDir, imagePath, configJSONPath, manifestPath, junitXMLPath, fixturesDir string,
-) []string {
-	// Set PYTHONPATH to include the fixtures directory so that azldev_check can be imported.
-	// Use env command to set the environment variable before running pytest.
-	args := []string{
-		"env",
-		"PYTHONPATH=" + fixturesDir,
-		"python3", "-m", "pytest",
-		testDir,
-		"-v",
-		// Register the azldev_check conftest as a plugin.
-		"-p", "azldev_check.conftest",
-		"--azldev-image", imagePath,
-	}
+				break
+			}
+		}
 
-	if configJSONPath != "" {
-		// Map the config path to its location inside the mock chroot.
-		mockConfigJSONPath := filepath.Join(mockConfigDir, filepath.Base(configJSONPath))
-		args = append(args, "--azldev-config", mockConfigJSONPath)
-	}
-
-	if manifestPath != "" {
-		args = append(args, "--azldev-manifest", manifestPath)
-	}
-
-	if junitXMLPath != "" {
-		args = append(args, "--junit-xml", junitXMLPath)
+		if !hasJUnitXML {
+			args = append(args, "--junit-xml", options.JUnitXMLPath)
+		}
 	}
 
 	return args
-}
-
-// findImageForTest finds an image config that references the given test name.
-func findImageForTest(env *azldev.Env, testName string) (*projectconfig.ImageConfig, error) {
-	cfg := env.Config()
-	if cfg == nil {
-		return nil, errors.New("no project configuration loaded")
-	}
-
-	for _, image := range cfg.Images {
-		for _, t := range image.Tests {
-			if t == testName {
-				return &image, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no image references test %#q", testName)
-}
-
-// makePytestMockRunner creates a mock runner suitable for running pytest.
-func makePytestMockRunner(env *azldev.Env) (*mock.Runner, error) {
-	factory, err := buildenvfactory.NewMockRootFactoryForEnv(env)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create mock root factory:\n%w", err)
-	}
-
-	root, err := factory.CreateMockRoot(buildenv.CreateOptions{
-		Name:        "azldev-pytest",
-		Description: "Mock environment for running pytest image checks",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create mock root:\n%w", err)
-	}
-
-	return root.GetRunner(), nil
-}
-
-// extractPytestFixtures extracts the embedded Python fixture files to a temporary directory
-// under workDir. Returns the path to the directory containing the azldev_check package.
-func extractPytestFixtures(fs opctx.FS, workDir string) (string, error) {
-	fixturesDir, err := fileutils.MkdirTemp(fs, workDir, "azldev-pytest-fixtures-")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp dir for pytest fixtures:\n%w", err)
-	}
-
-	if err := pytestfixtures.ExtractTo(fs, fixturesDir); err != nil {
-		return "", fmt.Errorf("failed to extract pytest fixtures:\n%w", err)
-	}
-
-	return fixturesDir, nil
 }
