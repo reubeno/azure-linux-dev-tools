@@ -342,6 +342,14 @@
           "type": "object",
           "title": "Package groups",
           "description": "Definitions of package groups for shared binary package configuration"
+        },
+        "tests": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TestConfig"
+          },
+          "type": "object",
+          "title": "Tests",
+          "description": "Definitions of test suites for this project"
         }
       },
       "additionalProperties": false,
@@ -476,6 +484,14 @@
           "$ref": "#/$defs/ImageDefinition",
           "title": "Definition",
           "description": "Identifies where to find the definition for this image"
+        },
+        "tests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Tests",
+          "description": "List of test suite names that apply to this image"
         }
       },
       "additionalProperties": false,
@@ -702,6 +718,51 @@
           "examples": [
             "abc1234def5678"
           ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "TestConfig": {
+      "properties": {
+        "description": {
+          "type": "string",
+          "title": "Description",
+          "description": "Description of this test suite"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "pytest lisa"
+          ],
+          "title": "Type",
+          "description": "Type of test framework (pytest or lisa)"
+        },
+        "test-dir": {
+          "type": "string",
+          "title": "Test directory",
+          "description": "Path to the directory containing pytest test files (required for pytest type)"
+        },
+        "runbook": {
+          "type": "string",
+          "title": "Runbook path",
+          "description": "Path to the LISA runbook file (required for lisa type)"
+        },
+        "admin-private-key-path": {
+          "type": "string",
+          "title": "Admin private key path",
+          "description": "Path to the admin SSH private key file (required for lisa type)"
+        },
+        "mock-packages": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Mock packages",
+          "description": "Additional RPM packages to install in the mock chroot for pytest tests"
         }
       },
       "additionalProperties": false,

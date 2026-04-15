@@ -42,6 +42,7 @@ func loadAndResolveProjectConfig(
 		Distros:           make(map[string]DistroDefinition),
 		GroupsByComponent: make(map[string][]string),
 		PackageGroups:     make(map[string]PackageGroupConfig),
+		Tests:             make(map[string]TestConfig),
 	}
 
 	for _, configFilePath := range configFilePaths {
@@ -124,6 +125,10 @@ func mergeConfigFile(resolvedCfg *ProjectConfig, loadedCfg *ConfigFile) error {
 	}
 
 	if err := mergePackageGroups(resolvedCfg, loadedCfg); err != nil {
+		return err
+	}
+
+	if err := mergeTests(resolvedCfg, loadedCfg); err != nil {
 		return err
 	}
 
@@ -245,6 +250,24 @@ func mergePackageGroups(resolvedCfg *ProjectConfig, loadedCfg *ConfigFile) error
 		}
 
 		resolvedCfg.PackageGroups[groupName] = group
+	}
+
+	return nil
+}
+
+// mergeTests merges test definitions from a loaded config file into the
+// resolved config. Duplicate test names are not allowed.
+func mergeTests(resolvedCfg *ProjectConfig, loadedCfg *ConfigFile) error {
+	for testName, test := range loadedCfg.Tests {
+		if _, ok := resolvedCfg.Tests[testName]; ok {
+			return fmt.Errorf("%w: %s", ErrDuplicateTests, testName)
+		}
+
+		// Fill out fields not explicitly serialized.
+		test.Name = testName
+		test.SourceConfigFile = loadedCfg
+
+		resolvedCfg.Tests[testName] = *(test.WithAbsolutePaths(loadedCfg.dir))
 	}
 
 	return nil

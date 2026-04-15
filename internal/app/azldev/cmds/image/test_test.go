@@ -21,10 +21,10 @@ func TestNewImageTestCmd(t *testing.T) {
 func TestNewImageTestCmd_Flags(t *testing.T) {
 	cmd := image.NewImageTestCmd()
 
+	assert.NotNil(t, cmd.Flags().Lookup("name"))
 	assert.NotNil(t, cmd.Flags().Lookup("image-path"))
-	assert.NotNil(t, cmd.Flags().Lookup("test-runner"))
-	assert.NotNil(t, cmd.Flags().Lookup("runbook-path"))
-	assert.NotNil(t, cmd.Flags().Lookup("admin-private-key-path"))
+	assert.NotNil(t, cmd.Flags().Lookup("manifest"))
+	assert.NotNil(t, cmd.Flags().Lookup("junit-xml"))
 }
 
 func TestCheckTestRunner_UnsupportedRunner(t *testing.T) {

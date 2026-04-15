@@ -52,6 +52,9 @@ type ConfigFile struct {
 	// to be applied to sets of binary packages.
 	PackageGroups map[string]PackageGroupConfig `toml:"package-groups,omitempty" jsonschema:"title=Package groups,description=Definitions of package groups for shared binary package configuration"`
 
+	// Definitions of test suites.
+	Tests map[string]TestConfig `toml:"tests,omitempty" validate:"dive" jsonschema:"title=Tests,description=Definitions of test suites for this project"`
+
 	// Internal fields used to track the origin of the config file; `dir` is the directory
 	// that the config file's relative paths are based from.
 	sourcePath string `toml:"-"`
@@ -96,6 +99,15 @@ func (f ConfigFile) Validate() error {
 		err := component.Build.Validate()
 		if err != nil {
 			return fmt.Errorf("invalid build config for component %#q:\n%w", componentName, err)
+		}
+	}
+
+	// Validate test configurations.
+	for testName, test := range f.Tests {
+		test.Name = testName
+
+		if err := test.Validate(); err != nil {
+			return fmt.Errorf("invalid test %#q:\n%w", testName, err)
 		}
 	}
 

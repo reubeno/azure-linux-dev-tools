@@ -6,16 +6,19 @@ Run tests against an Azure Linux image
 
 ### Synopsis
 
-Run tests against an Azure Linux image using a supported test runner.
+Run tests against an Azure Linux image using a test suite defined in the
+project configuration.
 
-Currently only the LISA test runner is supported. The image must be in qcow2,
-vhd, or vhdfixed format. If the image is in vhd/vhdfixed format it is
-automatically converted to qcow2 before running the tests.
+Test suites are defined in the [tests] section of azldev.toml and referenced
+by images via the 'tests' field. Each test suite specifies a type (pytest or
+lisa) and framework-specific configuration.
 
-Requirements:
-  - lisa (Installation instructions: https://github.com/microsoft/lisa/blob/main/INSTALL.md)
-  - runbook file (YAML format defining the tests to run: https://github.com/microsoft/lisa/blob/main/docs/Runbooks.md)
-  - qemu-img (for vhd/vhdfixed to qcow2 conversion, if needed)
+For pytest tests, the test runner executes inside a mock chroot with
+pre-installed dependencies. The image file and test directory are bind-mounted
+into the chroot.
+
+For LISA tests, the test runner executes on the host and boots the image in a
+QEMU VM.
 
 ```
 azldev image test [flags]
@@ -24,21 +27,27 @@ azldev image test [flags]
 ### Examples
 
 ```
-  # Run LISA tests against a qcow2 image
-  azldev image test --image-path ./out/image.qcow2 --test-runner lisa --runbook-path ./runbooks/smoke.yml
+  # Run a pytest-based test suite
+  azldev image test --name smoke --image-path ./out/image.qcow2
 
-  # Run LISA tests against a vhd image (auto-converted to qcow2)
-  azldev image test --image-path ./out/image.vhd --test-runner lisa --runbook-path ./runbooks/smoke.yml
+  # Run with a kiwi manifest for package validation
+  azldev image test --name smoke --image-path ./out/image.qcow2 --manifest ./out/image.packages
+
+  # Run a LISA-based test suite
+  azldev image test --name integration --image-path ./out/image.qcow2
+
+  # Generate JUnit XML output (pytest only)
+  azldev image test --name smoke --image-path ./out/image.qcow2 --junit-xml results.xml
 ```
 
 ### Options
 
 ```
-  -k, --admin-private-key-path string   Path to the admin SSH private key file passed to LISA
-  -h, --help                            help for test
-  -i, --image-path string               Path to the disk image file to test
-  -r, --runbook-path string             Path to the test runbook file
-      --test-runner string              Test runner to use (currently only 'lisa' is supported)
+  -h, --help                help for test
+  -i, --image-path string   Path to the disk image file to test
+      --junit-xml string    Path for writing JUnit XML output (pytest only)
+      --manifest string     Path to a kiwi .packages manifest file (optional, for pytest tests)
+      --name string         Name of the test suite (as defined in [tests] section of azldev.toml)
 ```
 
 ### Options inherited from parent commands

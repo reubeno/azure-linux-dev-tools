@@ -24,6 +24,10 @@ type ImageConfig struct {
 
 	// Where to find its definition.
 	Definition ImageDefinition `toml:"definition,omitempty" json:"definition,omitempty" jsonschema:"title=Definition,description=Identifies where to find the definition for this image"`
+
+	// Tests lists the names of test suites (defined in the top-level [tests] section)
+	// that apply to this image.
+	Tests []string `toml:"tests,omitempty" json:"tests,omitempty" jsonschema:"title=Tests,description=List of test suite names that apply to this image"`
 }
 
 // Defines where to find an image definition.
@@ -69,6 +73,7 @@ func (i *ImageConfig) WithAbsolutePaths(referenceDir string) *ImageConfig {
 		Description:      i.Description,
 		SourceConfigFile: i.SourceConfigFile,
 		Definition:       deep.MustCopy(i.Definition),
+		Tests:            deep.MustCopy(i.Tests),
 	}
 
 	// Fix up paths.

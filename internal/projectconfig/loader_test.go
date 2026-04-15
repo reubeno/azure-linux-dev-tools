@@ -798,3 +798,147 @@ channel = "devel"
 		}
 	}
 }
+
+func TestLoadAndResolveProjectConfig_TestSuite(t *testing.T) {
+	const configContents = `
+[tests.smoke]
+type = "pytest"
+test-dir = "checks/smoke"
+description = "Smoke tests for images"
+mock-packages = ["libguestfs-tools"]
+
+[tests.integration]
+type = "lisa"
+runbook = "runbooks/basic.yml"
+admin-private-key-path = "keys/admin"
+description = "LISA integration tests"
+`
+
+	configDir := filepath.Dir(testConfigPath)
+
+	ctx := testctx.NewCtx()
+	require.NoError(t, fileutils.WriteFile(ctx.FS(), testConfigPath, []byte(configContents), fileperms.PrivateFile))
+
+	config, err := loadAndResolveProjectConfig(ctx.FS(), false, testConfigPath)
+	require.NoError(t, err)
+
+	require.Len(t, config.Tests, 2)
+
+	// Check pytest test.
+	if assert.Contains(t, config.Tests, "smoke") {
+		smokeTest := config.Tests["smoke"]
+		assert.Equal(t, "smoke", smokeTest.Name)
+		assert.Equal(t, TestTypePytest, smokeTest.Type)
+		assert.Equal(t, filepath.Join(configDir, "checks/smoke"), smokeTest.TestDir)
+		assert.Equal(t, "Smoke tests for images", smokeTest.Description)
+		assert.Equal(t, []string{"libguestfs-tools"}, smokeTest.MockPackages)
+	}
+
+	// Check LISA test.
+	if assert.Contains(t, config.Tests, "integration") {
+		lisaTest := config.Tests["integration"]
+		assert.Equal(t, "integration", lisaTest.Name)
+		assert.Equal(t, TestTypeLisa, lisaTest.Type)
+		assert.Equal(t, filepath.Join(configDir, "runbooks/basic.yml"), lisaTest.RunbookPath)
+		assert.Equal(t, filepath.Join(configDir, "keys/admin"), lisaTest.AdminPrivateKeyPath)
+		assert.Equal(t, "LISA integration tests", lisaTest.Description)
+	}
+}
+
+func TestLoadAndResolveProjectConfig_DuplicateTests(t *testing.T) {
+	testFiles := []struct {
+		path     string
+		contents string
+	}{
+		{testConfigPath, `
+includes = ["include.toml"]
+
+[tests.smoke]
+type = "pytest"
+test-dir = "checks/smoke"
+`},
+		{"/project/include.toml", `
+[tests.smoke]
+type = "pytest"
+test-dir = "checks/other"
+`},
+	}
+
+	ctx := testctx.NewCtx()
+
+	for _, testFile := range testFiles {
+		require.NoError(t, fileutils.MkdirAll(ctx.FS(), filepath.Dir(testFile.path)))
+		require.NoError(t, fileutils.WriteFile(ctx.FS(), testFile.path, []byte(testFile.contents), fileperms.PrivateFile))
+	}
+
+	_, err := loadAndResolveProjectConfig(ctx.FS(), false, testFiles[0].path)
+	require.ErrorIs(t, err, ErrDuplicateTests)
+}
+
+func TestLoadAndResolveProjectConfig_InvalidTestType(t *testing.T) {
+	const configContents = `
+[tests.bad]
+type = "unsupported"
+test-dir = "checks/bad"
+`
+
+	ctx := testctx.NewCtx()
+	require.NoError(t, fileutils.WriteFile(ctx.FS(), testConfigPath, []byte(configContents), fileperms.PrivateFile))
+
+	_, err := loadAndResolveProjectConfig(ctx.FS(), false, testConfigPath)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnknownTestType)
+}
+
+func TestLoadAndResolveProjectConfig_TestMissingRequiredField(t *testing.T) {
+	const configContents = `
+[tests.smoke]
+type = "pytest"
+# Missing test-dir
+`
+
+	ctx := testctx.NewCtx()
+	require.NoError(t, fileutils.WriteFile(ctx.FS(), testConfigPath, []byte(configContents), fileperms.PrivateFile))
+
+	_, err := loadAndResolveProjectConfig(ctx.FS(), false, testConfigPath)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrMissingTestField)
+}
+
+func TestLoadAndResolveProjectConfig_ImageWithValidTestRef(t *testing.T) {
+	const configContents = `
+[tests.smoke]
+type = "pytest"
+test-dir = "checks/smoke"
+
+[images.myimage]
+description = "Test image"
+tests = ["smoke"]
+`
+
+	ctx := testctx.NewCtx()
+	require.NoError(t, fileutils.WriteFile(ctx.FS(), testConfigPath, []byte(configContents), fileperms.PrivateFile))
+
+	config, err := loadAndResolveProjectConfig(ctx.FS(), false, testConfigPath)
+	require.NoError(t, err)
+
+	if assert.Contains(t, config.Images, "myimage") {
+		assert.Equal(t, []string{"smoke"}, config.Images["myimage"].Tests)
+	}
+}
+
+func TestLoadAndResolveProjectConfig_ImageWithInvalidTestRef(t *testing.T) {
+	const configContents = `
+[images.myimage]
+description = "Test image"
+tests = ["nonexistent"]
+`
+
+	ctx := testctx.NewCtx()
+	require.NoError(t, fileutils.WriteFile(ctx.FS(), testConfigPath, []byte(configContents), fileperms.PrivateFile))
+
+	_, err := loadAndResolveProjectConfig(ctx.FS(), false, testConfigPath)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUndefinedTest)
+	assert.Contains(t, err.Error(), "nonexistent")
+}

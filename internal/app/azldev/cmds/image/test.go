@@ -10,16 +10,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
+	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
+	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 )
 
 const (
-	// testRunnerLisa is the only supported test runner.
+	// testRunnerLisa is the LISA test framework identifier.
 	testRunnerLisa = "lisa"
 
 	// testImagePrefix is the prefix used for qcow2 images created during image testing.
@@ -28,10 +31,20 @@ const (
 
 // ImageTestOptions holds the options for the 'image test' command.
 type ImageTestOptions struct {
-	ImagePath           string
-	TestRunner          string
-	RunbookPath         string
-	AdminPrivateKeyPath string
+	// Name selects a test suite defined in the [tests] TOML section.
+	Name string
+
+	// ImagePath is the path to the image file to test.
+	ImagePath string
+
+	// ManifestPath is an optional path to a kiwi .packages manifest file.
+	ManifestPath string
+
+	// JUnitXMLPath is an optional path for writing JUnit XML output (pytest only).
+	JUnitXMLPath string
+
+	// PytestArgs are extra arguments passed through to pytest.
+	PytestArgs []string
 }
 
 func testOnAppInit(_ *azldev.App, parentCmd *cobra.Command) {
@@ -45,72 +58,134 @@ func NewImageTestCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "test",
 		Short: "Run tests against an Azure Linux image",
-		Long: `Run tests against an Azure Linux image using a supported test runner.
+		Long: `Run tests against an Azure Linux image using a test suite defined in the
+project configuration.
 
-Currently only the LISA test runner is supported. The image must be in qcow2,
-vhd, or vhdfixed format. If the image is in vhd/vhdfixed format it is
-automatically converted to qcow2 before running the tests.
+Test suites are defined in the [tests] section of azldev.toml and referenced
+by images via the 'tests' field. Each test suite specifies a type (pytest or
+lisa) and framework-specific configuration.
 
-Requirements:
-  - lisa (Installation instructions: https://github.com/microsoft/lisa/blob/main/INSTALL.md)
-  - runbook file (YAML format defining the tests to run: https://github.com/microsoft/lisa/blob/main/docs/Runbooks.md)
-  - qemu-img (for vhd/vhdfixed to qcow2 conversion, if needed)`,
-		Example: `  # Run LISA tests against a qcow2 image
-  azldev image test --image-path ./out/image.qcow2 --test-runner lisa --runbook-path ./runbooks/smoke.yml
+For pytest tests, the test runner executes inside a mock chroot with
+pre-installed dependencies. The image file and test directory are bind-mounted
+into the chroot.
 
-  # Run LISA tests against a vhd image (auto-converted to qcow2)
-  azldev image test --image-path ./out/image.vhd --test-runner lisa --runbook-path ./runbooks/smoke.yml`,
-		RunE: azldev.RunFuncWithoutRequiredConfig(func(env *azldev.Env) (interface{}, error) {
-			return nil, testImage(env, options)
+For LISA tests, the test runner executes on the host and boots the image in a
+QEMU VM.`,
+		Example: `  # Run a pytest-based test suite
+  azldev image test --name smoke --image-path ./out/image.qcow2
+
+  # Run with a kiwi manifest for package validation
+  azldev image test --name smoke --image-path ./out/image.qcow2 --manifest ./out/image.packages
+
+  # Run a LISA-based test suite
+  azldev image test --name integration --image-path ./out/image.qcow2
+
+  # Generate JUnit XML output (pytest only)
+  azldev image test --name smoke --image-path ./out/image.qcow2 --junit-xml results.xml`,
+		RunE: azldev.RunFunc(func(env *azldev.Env) (interface{}, error) {
+			return nil, runImageTest(env, options)
 		}),
 	}
+
+	cmd.Flags().StringVar(&options.Name, "name", "",
+		"Name of the test suite (as defined in [tests] section of azldev.toml)")
+	_ = cmd.MarkFlagRequired("name")
 
 	cmd.Flags().StringVarP(&options.ImagePath, "image-path", "i", "",
 		"Path to the disk image file to test")
 	_ = cmd.MarkFlagRequired("image-path")
 	_ = cmd.MarkFlagFilename("image-path")
 
-	cmd.Flags().StringVar(&options.TestRunner, "test-runner", "",
-		"Test runner to use (currently only 'lisa' is supported)")
-	_ = cmd.MarkFlagRequired("test-runner")
+	cmd.Flags().StringVar(&options.ManifestPath, "manifest", "",
+		"Path to a kiwi .packages manifest file (optional, for pytest tests)")
+	_ = cmd.MarkFlagFilename("manifest")
 
-	cmd.Flags().StringVarP(&options.RunbookPath, "runbook-path", "r", "",
-		"Path to the test runbook file")
-	_ = cmd.MarkFlagRequired("runbook-path")
-	_ = cmd.MarkFlagFilename("runbook-path")
-
-	cmd.Flags().StringVarP(&options.AdminPrivateKeyPath, "admin-private-key-path", "k", "",
-		"Path to the admin SSH private key file passed to LISA")
-	_ = cmd.MarkFlagRequired("admin-private-key-path")
-	_ = cmd.MarkFlagFilename("admin-private-key-path")
+	cmd.Flags().StringVar(&options.JUnitXMLPath, "junit-xml", "",
+		"Path for writing JUnit XML output (pytest only)")
+	_ = cmd.MarkFlagFilename("junit-xml")
 
 	return cmd
 }
 
-// testImage implements the core logic for the 'image test' command.
-func testImage(env *azldev.Env, options *ImageTestOptions) error {
-	// Check 1: validate test runner.
-	if err := CheckTestRunner(options.TestRunner); err != nil {
+// runImageTest dispatches to the appropriate test runner based on the test suite's type.
+func runImageTest(env *azldev.Env, options *ImageTestOptions) error {
+	// Resolve the test suite from the project config.
+	testConfig, err := resolveTestByName(env, options.Name)
+	if err != nil {
 		return err
 	}
 
-	// Check 2: verify lisa is installed.
+	// Validate that the image file exists.
+	if err := validateFileExists(env.FS(), options.ImagePath); err != nil {
+		return fmt.Errorf("--image-path:\n%w", err)
+	}
+
+	// If a manifest was provided, validate it exists.
+	if options.ManifestPath != "" {
+		if err := validateFileExists(env.FS(), options.ManifestPath); err != nil {
+			return fmt.Errorf("--manifest:\n%w", err)
+		}
+	}
+
+	switch testConfig.Type {
+	case projectconfig.TestTypePytest:
+		return runPytestSuite(env, testConfig, options)
+
+	case projectconfig.TestTypeLisa:
+		return runLisaSuite(env, testConfig, options)
+
+	default:
+		return fmt.Errorf("unsupported test type %#q for test %#q", testConfig.Type, testConfig.Name)
+	}
+}
+
+// resolveTestByName looks up a test suite by name in the project configuration.
+func resolveTestByName(env *azldev.Env, testName string) (*projectconfig.TestConfig, error) {
+	cfg := env.Config()
+	if cfg == nil {
+		return nil, errors.New("no project configuration loaded")
+	}
+
+	if testName == "" {
+		return nil, errors.New("test name is required")
+	}
+
+	if testConfig, ok := cfg.Tests[testName]; ok {
+		return &testConfig, nil
+	}
+
+	// Not found; list available tests in the error message.
+	availableTests := lo.Keys(cfg.Tests)
+	sort.Strings(availableTests)
+
+	if len(availableTests) == 0 {
+		return nil, fmt.Errorf("test %#q not found; no tests defined in project configuration", testName)
+	}
+
+	return nil, fmt.Errorf(
+		"test %#q not found; available tests: %s",
+		testName, strings.Join(availableTests, ", "),
+	)
+}
+
+// runLisaSuite runs a LISA-based test suite.
+func runLisaSuite(env *azldev.Env, testConfig *projectconfig.TestConfig, options *ImageTestOptions) error {
+	// Validate LISA-specific prerequisites.
 	if err := checkLisaInstalled(env); err != nil {
 		return err
 	}
 
-	// Check 3: validate admin private key path.
-	if err := validateFileExists(env.FS(), options.AdminPrivateKeyPath); err != nil {
-		return fmt.Errorf("--admin-private-key-path:\n%w", err)
+	if err := validateFileExists(env.FS(), testConfig.AdminPrivateKeyPath); err != nil {
+		return fmt.Errorf("admin-private-key-path for test %#q:\n%w", testConfig.Name, err)
 	}
 
-	// Check 4: resolve the image to a qcow2 path (converting if necessary).
+	// Resolve the image to qcow2 format (LISA requires it).
 	qcow2Path, err := ResolveQcow2Image(env, options.ImagePath)
 	if err != nil {
 		return err
 	}
 
-	return runLisa(env, options.RunbookPath, qcow2Path, options.AdminPrivateKeyPath)
+	return runLisa(env, testConfig.RunbookPath, qcow2Path, testConfig.AdminPrivateKeyPath)
 }
 
 // CheckTestRunner returns an error if the test runner is not supported.
