@@ -34,7 +34,7 @@ const (
 	defaultHostname = "azurelinux-vm"
 )
 
-// ImageFormat represents a bootable disk image format.
+// ImageFormat represents a disk image or container image format.
 type ImageFormat string
 
 const (
@@ -46,12 +46,25 @@ const (
 	ImageFormatVhd ImageFormat = "vhd"
 	// ImageFormatVhdx is the Hyper-V virtual hard disk format.
 	ImageFormatVhdx ImageFormat = "vhdx"
+	// ImageFormatOCI is an OCI container image tarball.
+	ImageFormatOCI ImageFormat = "oci"
 )
 
-// SupportedImageFormats returns the list of supported bootable image formats in priority order.
-// When multiple formats exist, the first match in this order is selected.
-func SupportedImageFormats() []string {
-	return []string{string(ImageFormatRaw), string(ImageFormatQcow2), string(ImageFormatVhdx), string(ImageFormatVhd)}
+// AllImageFormats returns all supported image formats in priority order.
+func AllImageFormats() []string {
+	return []string{
+		string(ImageFormatRaw), string(ImageFormatQcow2),
+		string(ImageFormatVhdx), string(ImageFormatVhd),
+		string(ImageFormatOCI),
+	}
+}
+
+// BootableImageFormats returns the subset of image formats that can be booted in a VM.
+func BootableImageFormats() []string {
+	return []string{
+		string(ImageFormatRaw), string(ImageFormatQcow2),
+		string(ImageFormatVhdx), string(ImageFormatVhd),
+	}
 }
 
 // Assert that [ImageFormat] implements the [pflag.Value] interface.
@@ -73,7 +86,7 @@ func (f *ImageFormat) Set(value string) error {
 	case string(ImageFormatVhdx):
 		*f = ImageFormatVhdx
 	default:
-		return fmt.Errorf("unsupported image format %#q; supported: %v", value, SupportedImageFormats())
+		return fmt.Errorf("unsupported image format %#q; supported: %v", value, BootableImageFormats())
 	}
 
 	return nil
@@ -197,7 +210,7 @@ func addBootFlags(cmd *cobra.Command, options *ImageBootOptions) {
 	// Register shell completions for flags.
 	_ = cmd.RegisterFlagCompletionFunc("format",
 		func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-			return SupportedImageFormats(), cobra.ShellCompDirectiveNoFileComp
+			return BootableImageFormats(), cobra.ShellCompDirectiveNoFileComp
 		})
 	_ = cmd.RegisterFlagCompletionFunc("arch",
 		func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
@@ -245,7 +258,7 @@ func bootImage(env *azldev.Env, options *ImageBootOptions) error {
 
 		var err error
 
-		imagePath, imageFormat, err = findBootableImageArtifact(env, options.ImageName, imageFormat)
+		imagePath, imageFormat, err = findImageArtifact(env, options.ImageName, imageFormat, BootableImageFormats())
 		if err != nil {
 			return err
 		}
@@ -288,18 +301,21 @@ func bootImage(env *azldev.Env, options *ImageBootOptions) error {
 // Most formats have a single extension matching the format name, but vhd accepts
 // both .vhd and .vhdfixed since QEMU treats them identically.
 func fileExtensionsForFormat(format string) []string {
-	if format == string(ImageFormatVhd) {
+	switch format {
+	case string(ImageFormatVhd):
 		return []string{"vhd", "vhdfixed"}
+	case string(ImageFormatOCI):
+		return []string{"oci.tar.xz", "oci.tar.gz", "oci.tar"}
+	default:
+		return []string{format}
 	}
-
-	return []string{format}
 }
 
-// findBootableImageArtifact locates a bootable image artifact in the output directory for the
-// given image name. If format is specified, only that format is searched. Otherwise, formats
-// are searched in priority order (raw, qcow2, vhdx, vhd) and the first match is returned.
-func findBootableImageArtifact(
-	env *azldev.Env, imageName, format string,
+// findImageArtifact locates an image artifact in the output directory for the
+// given image name. If format is specified, only that format is searched. Otherwise,
+// the provided searchFormats are searched in order and the first match is returned.
+func findImageArtifact(
+	env *azldev.Env, imageName, format string, searchFormats []string,
 ) (imagePath, imageFormat string, err error) {
 	// First validate the image exists in project configuration.
 	_, err = ResolveImageByName(env, imageName)
@@ -323,12 +339,12 @@ func findBootableImageArtifact(
 	}
 
 	// Determine which formats to search.
-	formatsToSearch := SupportedImageFormats()
+	formatsToSearch := searchFormats
 	if format != "" {
 		formatsToSearch = []string{format}
 	}
 
-	// Search for bootable artifacts in priority order.
+	// Search for image artifacts in priority order.
 	for _, currentFormat := range formatsToSearch {
 		for _, ext := range fileExtensionsForFormat(currentFormat) {
 			pattern := filepath.Join(imageOutputDir, "*."+ext)
@@ -345,7 +361,7 @@ func findBootableImageArtifact(
 		}
 	}
 
-	// No bootable artifact found - provide helpful error message.
+	// No image artifact found - provide helpful error message.
 	if format != "" {
 		// Specific format requested but not found; list what is available.
 		allArtifacts, _ := listImageArtifacts(env, imageOutputDir)
@@ -363,14 +379,23 @@ func findBootableImageArtifact(
 	}
 
 	return "", "", fmt.Errorf(
-		"no bootable image artifact found in %#q; supported formats: %v",
-		imageOutputDir, SupportedImageFormats(),
+		"no image artifact found in %#q; supported formats: %v",
+		imageOutputDir, searchFormats,
 	)
 }
 
 // InferImageFormat determines the image format from the file extension.
 // Returns an error if the extension does not match a supported format.
 func InferImageFormat(imagePath string) (string, error) {
+	lower := strings.ToLower(imagePath)
+
+	// Check multi-part extensions first (e.g., ".oci.tar.xz").
+	for _, ext := range []string{".oci.tar.xz", ".oci.tar.gz", ".oci.tar"} {
+		if strings.HasSuffix(lower, ext) {
+			return string(ImageFormatOCI), nil
+		}
+	}
+
 	ext := strings.ToLower(filepath.Ext(imagePath))
 	if ext == "" {
 		return "", fmt.Errorf(
@@ -386,11 +411,10 @@ func InferImageFormat(imagePath string) (string, error) {
 	}
 
 	// Validate the inferred format is supported.
-	supported := SupportedImageFormats()
-	if !lo.Contains(supported, format) {
+	if !lo.Contains(AllImageFormats(), format) {
 		return "", fmt.Errorf(
 			"unsupported image format %#q inferred from %#q; supported formats: %v",
-			format, imagePath, supported,
+			format, imagePath, AllImageFormats(),
 		)
 	}
 

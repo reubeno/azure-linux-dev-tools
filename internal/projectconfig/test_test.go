@@ -163,16 +163,16 @@ func TestTestConfig_MergeUpdatesFrom(t *testing.T) {
 	})
 }
 
-func TestValidateImageTestReferences(t *testing.T) {
+func TestValidateTestSuiteReferences(t *testing.T) {
 	t.Run("valid references", func(t *testing.T) {
 		cfg := projectconfig.ProjectConfig{
 			Images: map[string]projectconfig.ImageConfig{
 				"myimage": {
 					Name:  "myimage",
-					Tests: []projectconfig.ImageTestRef{{Name: "smoke"}},
+					Tests: projectconfig.ImageTestsConfig{TestSuites: []projectconfig.TestSuiteRef{{Name: "smoke"}}},
 				},
 			},
-			Tests: map[string]projectconfig.TestConfig{
+			TestSuites: map[string]projectconfig.TestConfig{
 				"smoke": {
 					Name: "smoke",
 					Type: projectconfig.TestTypePytest,
@@ -195,10 +195,10 @@ func TestValidateImageTestReferences(t *testing.T) {
 			Images: map[string]projectconfig.ImageConfig{
 				"myimage": {
 					Name:  "myimage",
-					Tests: []projectconfig.ImageTestRef{{Name: "nonexistent"}},
+					Tests: projectconfig.ImageTestsConfig{TestSuites: []projectconfig.TestSuiteRef{{Name: "nonexistent"}}},
 				},
 			},
-			Tests:             make(map[string]projectconfig.TestConfig),
+			TestSuites:        make(map[string]projectconfig.TestConfig),
 			Components:        make(map[string]projectconfig.ComponentConfig),
 			ComponentGroups:   make(map[string]projectconfig.ComponentGroupConfig),
 			Distros:           make(map[string]projectconfig.DistroDefinition),
@@ -216,7 +216,7 @@ func TestValidateImageTestReferences(t *testing.T) {
 			Images: map[string]projectconfig.ImageConfig{
 				"myimage": {Name: "myimage"},
 			},
-			Tests:             make(map[string]projectconfig.TestConfig),
+			TestSuites:        make(map[string]projectconfig.TestConfig),
 			Components:        make(map[string]projectconfig.ComponentConfig),
 			ComponentGroups:   make(map[string]projectconfig.ComponentGroupConfig),
 			Distros:           make(map[string]projectconfig.DistroDefinition),

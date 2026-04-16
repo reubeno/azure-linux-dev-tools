@@ -31,10 +31,16 @@ const (
 
 // ImageTestOptions holds the options for the 'image test' command.
 type ImageTestOptions struct {
-	// Name selects a test suite defined in the [tests] TOML section.
-	Name string
+	// ImageName is the name of the image (positional argument), used to look up its
+	// test suites and optionally resolve the image artifact path.
+	ImageName string
 
-	// ImagePath is the path to the image file to test.
+	// TestSuites optionally selects specific test suites to run. When empty, all test
+	// suites associated with the image are run.
+	TestSuites []string
+
+	// ImagePath is an optional explicit path to the image file. When empty, the image
+	// artifact is resolved from the image name in the output directory.
 	ImagePath string
 
 	// JUnitXMLPath is an optional path for writing JUnit XML output.
@@ -50,41 +56,57 @@ func NewImageTestCmd() *cobra.Command {
 	options := &ImageTestOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "test",
+		Use:   "test IMAGE_NAME",
 		Short: "Run tests against an Azure Linux image",
-		Long: `Run tests against an Azure Linux image using a test suite defined in the
+		Long: `Run tests against an Azure Linux image using test suites defined in the
 project configuration.
 
-Test suites are defined in the [tests] section of azldev.toml and referenced
-by images via the 'tests' field. Each test suite specifies a type (pytest or
-lisa) and framework-specific configuration in a matching subtable.
+Test suites are defined in the [test-suites] section of azldev.toml and referenced
+by images via the [images.NAME.tests] subtable. Each test suite specifies a type
+(pytest or lisa) and framework-specific configuration in a matching subtable.
+
+By default, all test suites associated with the named image are run. Use
+--test-suite to select specific suites (may be repeated).
+
+The image artifact can be specified explicitly with --image-path, or resolved
+automatically from the image name in the output directory.
 
 For pytest tests, azldev creates a Python virtual environment, installs
 dependencies from pyproject.toml in the working directory, and runs pytest
-with the configured arguments. Use {image} in the args to insert the image path.
+with the configured test paths and extra arguments. Use {image-path} in
+extra-args to insert the image path. Glob patterns (including **) in
+test-paths are expanded automatically.
 
 For LISA tests, the test runner executes on the host and boots the image in a
 QEMU VM.`,
-		Example: `  # Run a pytest-based test suite
-  azldev image test --name smoke --image-path ./out/image.raw
+		Example: `  # Run all test suites for an image (artifact auto-resolved from output dir)
+  azldev image test vm-base
 
-  # Run a LISA-based test suite
-  azldev image test --name integration --image-path ./out/image.qcow2
+  # Run all test suites with an explicit image path
+  azldev image test vm-base --image-path ./out/images/vm-base/image.raw
+
+  # Run a specific test suite
+  azldev image test vm-base --test-suite common-vm-checks
+
+  # Run multiple specific test suites
+  azldev image test vm-base --test-suite common-vm-checks --test-suite vm-base-checks
 
   # Generate JUnit XML output
-  azldev image test --name smoke --image-path ./out/image.raw --junit-xml results.xml`,
-		RunE: azldev.RunFunc(func(env *azldev.Env) (interface{}, error) {
+  azldev image test vm-base --junit-xml results.xml`,
+		Args: cobra.ExactArgs(1),
+		RunE: azldev.RunFuncWithExtraArgs(func(env *azldev.Env, args []string) (interface{}, error) {
+			options.ImageName = args[0]
+
 			return nil, runImageTest(env, options)
 		}),
+		ValidArgsFunction: generateImageNameCompletions,
 	}
 
-	cmd.Flags().StringVar(&options.Name, "name", "",
-		"Name of the test suite (as defined in [tests] section of azldev.toml)")
-	_ = cmd.MarkFlagRequired("name")
+	cmd.Flags().StringSliceVar(&options.TestSuites, "test-suite", nil,
+		"Name of a test suite to run (may be repeated; defaults to all suites for the image)")
 
 	cmd.Flags().StringVarP(&options.ImagePath, "image-path", "i", "",
-		"Path to the disk image file to test")
-	_ = cmd.MarkFlagRequired("image-path")
+		"Path to the disk image file (resolved from image name if not specified)")
 	_ = cmd.MarkFlagFilename("image-path")
 
 	cmd.Flags().StringVar(&options.JUnitXMLPath, "junit-xml", "",
@@ -94,19 +116,120 @@ QEMU VM.`,
 	return cmd
 }
 
-// runImageTest dispatches to the appropriate test runner based on the test suite's type.
+// runImageTest resolves which test suites to run and dispatches each one.
 func runImageTest(env *azldev.Env, options *ImageTestOptions) error {
-	// Resolve the test suite from the project config.
-	testConfig, err := resolveTestByName(env, options.Name)
+	cfg := env.Config()
+	if cfg == nil {
+		return errors.New("no project configuration loaded")
+	}
+
+	// Resolve the image config from the positional argument.
+	imageConfig, err := ResolveImageByName(env, options.ImageName)
 	if err != nil {
 		return err
 	}
 
-	// Validate that the image file exists.
-	if err := validateFileExists(env.FS(), options.ImagePath); err != nil {
-		return fmt.Errorf("--image-path:\n%w", err)
+	// Resolve image path: explicit --image-path takes precedence, otherwise resolve
+	// from the image name in the output directory.
+	imagePath := options.ImagePath
+	if imagePath == "" {
+		var resolveErr error
+
+		imagePath, _, resolveErr = findImageArtifact(env, options.ImageName, "", AllImageFormats())
+		if resolveErr != nil {
+			return resolveErr
+		}
+
+		slog.Info("Resolved image artifact",
+			slog.String("image", options.ImageName),
+			slog.String("path", imagePath),
+		)
 	}
 
+	// Validate that the image file exists.
+	if err := validateFileExists(env.FS(), imagePath); err != nil {
+		return fmt.Errorf("image path:\n%w", err)
+	}
+
+	options.ImagePath = imagePath
+
+	// Determine which test suites to run.
+	suiteNames := resolveTestSuiteNames(imageConfig, options.TestSuites)
+
+	if len(suiteNames) == 0 {
+		slog.Warn("No test suites to run for image", slog.String("image", options.ImageName))
+
+		return nil
+	}
+
+	// Resolve and run each test suite, continuing past failures so all suites get a chance
+	// to run. Config/resolution errors abort immediately since they indicate a broken setup.
+	var testFailures []string
+
+	for _, suiteName := range suiteNames {
+		testConfig, err := resolveTestSuiteByName(cfg, suiteName)
+		if err != nil {
+			return err
+		}
+
+		if err := runTestSuite(env, testConfig, options); err != nil {
+			slog.Error("Test suite failed",
+				slog.String("suite", suiteName),
+				slog.Any("error", err),
+			)
+
+			testFailures = append(testFailures, suiteName)
+		}
+	}
+
+	if len(testFailures) > 0 {
+		return fmt.Errorf("%d of %d test suite(s) failed: %s",
+			len(testFailures), len(suiteNames), strings.Join(testFailures, ", "))
+	}
+
+	return nil
+}
+
+// resolveTestSuiteNames determines which test suites to run. If explicit names are
+// provided, they are used as-is. Otherwise, all test suites associated with the image
+// are returned.
+func resolveTestSuiteNames(
+	imageConfig *projectconfig.ImageConfig, explicitSuites []string,
+) []string {
+	if len(explicitSuites) > 0 {
+		return explicitSuites
+	}
+
+	return imageConfig.TestNames()
+}
+
+// resolveTestSuiteByName looks up a test suite by name in the project configuration.
+func resolveTestSuiteByName(
+	cfg *projectconfig.ProjectConfig, suiteName string,
+) (*projectconfig.TestConfig, error) {
+	testConfig, ok := cfg.TestSuites[suiteName]
+	if !ok {
+		availableSuites := lo.Keys(cfg.TestSuites)
+		sort.Strings(availableSuites)
+
+		if len(availableSuites) == 0 {
+			return nil, fmt.Errorf(
+				"test suite %#q not found; no test suites defined in project configuration", suiteName)
+		}
+
+		return nil, fmt.Errorf(
+			"test suite %#q not found; available test suites: %s",
+			suiteName, strings.Join(availableSuites, ", "),
+		)
+	}
+
+	return &testConfig, nil
+}
+
+// runTestSuite dispatches a single test suite to the appropriate runner.
+func runTestSuite(
+	env *azldev.Env, testConfig *projectconfig.TestConfig, options *ImageTestOptions,
+) error {
 	switch testConfig.Type {
 	case projectconfig.TestTypePytest:
 		return RunPytestSuite(env, testConfig, options)
@@ -115,37 +238,8 @@ func runImageTest(env *azldev.Env, options *ImageTestOptions) error {
 		return runLisaSuite(env, testConfig, options)
 
 	default:
-		return fmt.Errorf("unsupported test type %#q for test %#q", testConfig.Type, testConfig.Name)
+		return fmt.Errorf("unsupported test type %#q for test suite %#q", testConfig.Type, testConfig.Name)
 	}
-}
-
-// resolveTestByName looks up a test suite by name in the project configuration.
-func resolveTestByName(env *azldev.Env, testName string) (*projectconfig.TestConfig, error) {
-	cfg := env.Config()
-	if cfg == nil {
-		return nil, errors.New("no project configuration loaded")
-	}
-
-	if testName == "" {
-		return nil, errors.New("test name is required")
-	}
-
-	if testConfig, ok := cfg.Tests[testName]; ok {
-		return &testConfig, nil
-	}
-
-	// Not found; list available tests in the error message.
-	availableTests := lo.Keys(cfg.Tests)
-	sort.Strings(availableTests)
-
-	if len(availableTests) == 0 {
-		return nil, fmt.Errorf("test %#q not found; no tests defined in project configuration", testName)
-	}
-
-	return nil, fmt.Errorf(
-		"test %#q not found; available tests: %s",
-		testName, strings.Join(availableTests, ", "),
-	)
 }
 
 // runLisaSuite runs a LISA-based test suite.

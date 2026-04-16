@@ -53,7 +53,7 @@ type ConfigFile struct {
 	PackageGroups map[string]PackageGroupConfig `toml:"package-groups,omitempty" jsonschema:"title=Package groups,description=Definitions of package groups for shared binary package configuration"`
 
 	// Definitions of test suites.
-	Tests map[string]TestConfig `toml:"tests,omitempty" validate:"dive" jsonschema:"title=Tests,description=Definitions of test suites for this project"`
+	TestSuites map[string]TestConfig `toml:"test-suites,omitempty" validate:"dive" jsonschema:"title=Test Suites,description=Definitions of test suites for this project"`
 
 	// Internal fields used to track the origin of the config file; `dir` is the directory
 	// that the config file's relative paths are based from.
@@ -103,7 +103,7 @@ func (f ConfigFile) Validate() error {
 	}
 
 	// Validate test configurations.
-	for testName, test := range f.Tests {
+	for testName, test := range f.TestSuites {
 		test.Name = testName
 
 		if err := test.Validate(); err != nil {

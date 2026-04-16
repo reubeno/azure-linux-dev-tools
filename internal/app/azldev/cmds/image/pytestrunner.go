@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
@@ -75,6 +76,10 @@ func RunPytestSuite(
 	venvPython := filepath.Join(venvDir, "bin", pythonProgram)
 
 	cmdArgs := append([]string{"-m", "pytest"}, pytestArgs...)
+
+	if env.Verbose() {
+		cmdArgs = append(cmdArgs, "--log-cli-level=DEBUG")
+	}
 
 	pytestCmd := exec.CommandContext(env, venvPython, cmdArgs...)
 	pytestCmd.Dir = pytestConfig.WorkingDir
@@ -196,11 +201,7 @@ func BuildNativePytestArgs(pytestConfig *projectconfig.PytestConfig, options *Im
 
 	// Expand test paths (glob patterns resolved relative to working dir).
 	for _, testPath := range pytestConfig.TestPaths {
-		if containsGlobMeta(testPath) {
-			args = append(args, expandGlob(testPath, pytestConfig.WorkingDir)...)
-		} else {
-			args = append(args, testPath)
-		}
+		args = append(args, expandGlob(testPath, pytestConfig.WorkingDir)...)
 	}
 
 	// Substitute placeholders in extra args (never glob-expanded).
@@ -216,23 +217,33 @@ func BuildNativePytestArgs(pytestConfig *projectconfig.PytestConfig, options *Im
 	return args
 }
 
-// containsGlobMeta returns true if the string contains glob metacharacters.
-func containsGlobMeta(s string) bool {
-	return strings.ContainsAny(s, "*?[")
-}
-
-// expandGlob expands a glob pattern relative to workingDir. If the pattern matches no
-// files, the original pattern is returned unchanged (letting pytest report the error).
+// expandGlob expands a glob pattern relative to workingDir using doublestar, which supports
+// recursive ** patterns. If the pattern matches no files, the original pattern is returned
+// unchanged (letting pytest report the error).
 func expandGlob(pattern string, workingDir string) []string {
-	// Resolve the pattern relative to the working directory.
 	absPattern := pattern
 	if workingDir != "" && !filepath.IsAbs(pattern) {
 		absPattern = filepath.Join(workingDir, pattern)
 	}
 
-	matches, err := filepath.Glob(absPattern)
-	if err != nil || len(matches) == 0 {
-		// Return the original (relative) pattern so pytest can report the error.
+	// Use WithFilesOnly so directory entries are excluded from glob results — pytest handles
+	// directory args directly (without globs). Use WithFailOnIOErrors to surface real I/O
+	// problems instead of silently returning empty. Follow symlinks (the default) since test
+	// trees may use them.
+	matches, err := doublestar.FilepathGlob(absPattern,
+		doublestar.WithFilesOnly(),
+		doublestar.WithFailOnIOErrors(),
+	)
+	if err != nil {
+		slog.Warn("Failed to expand glob pattern",
+			slog.String("pattern", pattern),
+			slog.Any("error", err),
+		)
+
+		return []string{pattern}
+	}
+
+	if len(matches) == 0 {
 		return []string{pattern}
 	}
 

@@ -14,17 +14,16 @@ import (
 func TestNewImageTestCmd(t *testing.T) {
 	cmd := image.NewImageTestCmd()
 	require.NotNil(t, cmd)
-	assert.Equal(t, "test", cmd.Use)
+	assert.Equal(t, "test IMAGE_NAME", cmd.Use)
 	assert.Contains(t, cmd.Short, "test")
 }
 
 func TestNewImageTestCmd_Flags(t *testing.T) {
 	cmd := image.NewImageTestCmd()
 
-	assert.NotNil(t, cmd.Flags().Lookup("name"))
+	assert.NotNil(t, cmd.Flags().Lookup("test-suite"))
 	assert.NotNil(t, cmd.Flags().Lookup("image-path"))
 	assert.NotNil(t, cmd.Flags().Lookup("junit-xml"))
-	assert.Nil(t, cmd.Flags().Lookup("manifest"), "manifest flag should have been removed")
 }
 
 func TestCheckTestRunner_UnsupportedRunner(t *testing.T) {

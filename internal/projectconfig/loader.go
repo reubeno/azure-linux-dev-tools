@@ -42,7 +42,7 @@ func loadAndResolveProjectConfig(
 		Distros:           make(map[string]DistroDefinition),
 		GroupsByComponent: make(map[string][]string),
 		PackageGroups:     make(map[string]PackageGroupConfig),
-		Tests:             make(map[string]TestConfig),
+		TestSuites:        make(map[string]TestConfig),
 	}
 
 	for _, configFilePath := range configFilePaths {
@@ -128,7 +128,7 @@ func mergeConfigFile(resolvedCfg *ProjectConfig, loadedCfg *ConfigFile) error {
 		return err
 	}
 
-	if err := mergeTests(resolvedCfg, loadedCfg); err != nil {
+	if err := mergeTestSuites(resolvedCfg, loadedCfg); err != nil {
 		return err
 	}
 
@@ -255,11 +255,11 @@ func mergePackageGroups(resolvedCfg *ProjectConfig, loadedCfg *ConfigFile) error
 	return nil
 }
 
-// mergeTests merges test definitions from a loaded config file into the
-// resolved config. Duplicate test names are not allowed.
-func mergeTests(resolvedCfg *ProjectConfig, loadedCfg *ConfigFile) error {
-	for testName, test := range loadedCfg.Tests {
-		if _, ok := resolvedCfg.Tests[testName]; ok {
+// mergeTestSuites merges test suite definitions from a loaded config file into the
+// resolved config. Duplicate test suite names are not allowed.
+func mergeTestSuites(resolvedCfg *ProjectConfig, loadedCfg *ConfigFile) error {
+	for testName, test := range loadedCfg.TestSuites {
+		if _, ok := resolvedCfg.TestSuites[testName]; ok {
 			return fmt.Errorf("%w: %s", ErrDuplicateTests, testName)
 		}
 
@@ -267,7 +267,7 @@ func mergeTests(resolvedCfg *ProjectConfig, loadedCfg *ConfigFile) error {
 		test.Name = testName
 		test.SourceConfigFile = loadedCfg
 
-		resolvedCfg.Tests[testName] = *(test.WithAbsolutePaths(loadedCfg.dir))
+		resolvedCfg.TestSuites[testName] = *(test.WithAbsolutePaths(loadedCfg.dir))
 	}
 
 	return nil

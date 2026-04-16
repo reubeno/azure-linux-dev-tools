@@ -801,20 +801,20 @@ channel = "devel"
 
 func TestLoadAndResolveProjectConfig_TestSuite(t *testing.T) {
 	const configContents = `
-[tests.smoke]
+[test-suites.smoke]
 type = "pytest"
 description = "Smoke tests for images"
 
-[tests.smoke.pytest]
+[test-suites.smoke.pytest]
 working-dir = "tests"
 test-paths = ["cases/test_*.py"]
 extra-args = ["--image-path", "{image-path}"]
 
-[tests.integration]
+[test-suites.integration]
 type = "lisa"
 description = "LISA integration tests"
 
-[tests.integration.lisa]
+[test-suites.integration.lisa]
 runbook = "runbooks/basic.yml"
 admin-private-key-path = "keys/admin"
 `
@@ -827,11 +827,11 @@ admin-private-key-path = "keys/admin"
 	config, err := loadAndResolveProjectConfig(ctx.FS(), false, testConfigPath)
 	require.NoError(t, err)
 
-	require.Len(t, config.Tests, 2)
+	require.Len(t, config.TestSuites, 2)
 
 	// Check pytest test.
-	if assert.Contains(t, config.Tests, "smoke") {
-		smokeTest := config.Tests["smoke"]
+	if assert.Contains(t, config.TestSuites, "smoke") {
+		smokeTest := config.TestSuites["smoke"]
 		assert.Equal(t, "smoke", smokeTest.Name)
 		assert.Equal(t, TestTypePytest, smokeTest.Type)
 		assert.Equal(t, "Smoke tests for images", smokeTest.Description)
@@ -842,8 +842,8 @@ admin-private-key-path = "keys/admin"
 	}
 
 	// Check LISA test.
-	if assert.Contains(t, config.Tests, "integration") {
-		lisaTest := config.Tests["integration"]
+	if assert.Contains(t, config.TestSuites, "integration") {
+		lisaTest := config.TestSuites["integration"]
 		assert.Equal(t, "integration", lisaTest.Name)
 		assert.Equal(t, TestTypeLisa, lisaTest.Type)
 		assert.Equal(t, "LISA integration tests", lisaTest.Description)
@@ -861,17 +861,17 @@ func TestLoadAndResolveProjectConfig_DuplicateTests(t *testing.T) {
 		{testConfigPath, `
 includes = ["include.toml"]
 
-[tests.smoke]
+[test-suites.smoke]
 type = "pytest"
 
-[tests.smoke.pytest]
+[test-suites.smoke.pytest]
 test-paths = ["cases/"]
 `},
 		{"/project/include.toml", `
-[tests.smoke]
+[test-suites.smoke]
 type = "pytest"
 
-[tests.smoke.pytest]
+[test-suites.smoke.pytest]
 test-paths = ["other/"]
 `},
 	}
@@ -889,7 +889,7 @@ test-paths = ["other/"]
 
 func TestLoadAndResolveProjectConfig_InvalidTestType(t *testing.T) {
 	const configContents = `
-[tests.bad]
+[test-suites.bad]
 type = "unsupported"
 `
 
@@ -903,9 +903,9 @@ type = "unsupported"
 
 func TestLoadAndResolveProjectConfig_TestMissingRequiredField(t *testing.T) {
 	const configContents = `
-[tests.smoke]
+[test-suites.smoke]
 type = "pytest"
-# Missing [tests.smoke.pytest] subtable
+# Missing [test-suites.smoke.pytest] subtable
 `
 
 	ctx := testctx.NewCtx()
@@ -918,15 +918,17 @@ type = "pytest"
 
 func TestLoadAndResolveProjectConfig_ImageWithValidTestRef(t *testing.T) {
 	const configContents = `
-[tests.smoke]
+[test-suites.smoke]
 type = "pytest"
 
-[tests.smoke.pytest]
+[test-suites.smoke.pytest]
 test-paths = ["cases/"]
 
 [images.myimage]
 description = "Test image"
-tests = [{ name = "smoke" }]
+
+[images.myimage.tests]
+test-suites = [{ name = "smoke" }]
 `
 
 	ctx := testctx.NewCtx()
@@ -936,7 +938,7 @@ tests = [{ name = "smoke" }]
 	require.NoError(t, err)
 
 	if assert.Contains(t, config.Images, "myimage") {
-		assert.Equal(t, []ImageTestRef{{Name: "smoke"}}, config.Images["myimage"].Tests)
+		assert.Equal(t, []TestSuiteRef{{Name: "smoke"}}, config.Images["myimage"].Tests.TestSuites)
 	}
 }
 
@@ -944,7 +946,9 @@ func TestLoadAndResolveProjectConfig_ImageWithInvalidTestRef(t *testing.T) {
 	const configContents = `
 [images.myimage]
 description = "Test image"
-tests = [{ name = "nonexistent" }]
+
+[images.myimage.tests]
+test-suites = [{ name = "nonexistent" }]
 `
 
 	ctx := testctx.NewCtx()

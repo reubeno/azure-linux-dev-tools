@@ -6,44 +6,58 @@ Run tests against an Azure Linux image
 
 ### Synopsis
 
-Run tests against an Azure Linux image using a test suite defined in the
+Run tests against an Azure Linux image using test suites defined in the
 project configuration.
 
-Test suites are defined in the [tests] section of azldev.toml and referenced
-by images via the 'tests' field. Each test suite specifies a type (pytest or
-lisa) and framework-specific configuration in a matching subtable.
+Test suites are defined in the [test-suites] section of azldev.toml and referenced
+by images via the [images.NAME.tests] subtable. Each test suite specifies a type
+(pytest or lisa) and framework-specific configuration in a matching subtable.
+
+By default, all test suites associated with the named image are run. Use
+--test-suite to select specific suites (may be repeated).
+
+The image artifact can be specified explicitly with --image-path, or resolved
+automatically from the image name in the output directory.
 
 For pytest tests, azldev creates a Python virtual environment, installs
 dependencies from pyproject.toml in the working directory, and runs pytest
-with the configured arguments. Use {image} in the args to insert the image path.
+with the configured test paths and extra arguments. Use {image-path} in
+extra-args to insert the image path. Glob patterns (including **) in
+test-paths are expanded automatically.
 
 For LISA tests, the test runner executes on the host and boots the image in a
 QEMU VM.
 
 ```
-azldev image test [flags]
+azldev image test IMAGE_NAME [flags]
 ```
 
 ### Examples
 
 ```
-  # Run a pytest-based test suite
-  azldev image test --name smoke --image-path ./out/image.raw
+  # Run all test suites for an image (artifact auto-resolved from output dir)
+  azldev image test vm-base
 
-  # Run a LISA-based test suite
-  azldev image test --name integration --image-path ./out/image.qcow2
+  # Run all test suites with an explicit image path
+  azldev image test vm-base --image-path ./out/images/vm-base/image.raw
+
+  # Run a specific test suite
+  azldev image test vm-base --test-suite common-vm-checks
+
+  # Run multiple specific test suites
+  azldev image test vm-base --test-suite common-vm-checks --test-suite vm-base-checks
 
   # Generate JUnit XML output
-  azldev image test --name smoke --image-path ./out/image.raw --junit-xml results.xml
+  azldev image test vm-base --junit-xml results.xml
 ```
 
 ### Options
 
 ```
-  -h, --help                help for test
-  -i, --image-path string   Path to the disk image file to test
-      --junit-xml string    Path for writing JUnit XML output
-      --name string         Name of the test suite (as defined in [tests] section of azldev.toml)
+  -h, --help                 help for test
+  -i, --image-path string    Path to the disk image file (resolved from image name if not specified)
+      --junit-xml string     Path for writing JUnit XML output
+      --test-suite strings   Name of a test suite to run (may be repeated; defaults to all suites for the image)
 ```
 
 ### Options inherited from parent commands

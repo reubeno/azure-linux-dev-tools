@@ -25,24 +25,30 @@ type ImageConfig struct {
 	// Where to find its definition.
 	Definition ImageDefinition `toml:"definition,omitempty" json:"definition,omitempty" jsonschema:"title=Definition,description=Identifies where to find the definition for this image"`
 
-	// Tests lists the test suite references that apply to this image. Each reference
-	// identifies a test suite defined in the top-level [tests] section and may carry
-	// per-test metadata in the future (e.g., required vs optional).
-	Tests []ImageTestRef `toml:"tests,omitempty" json:"tests,omitempty" jsonschema:"title=Tests,description=List of test suite references that apply to this image"`
+	// Tests holds the test configuration for this image, including which test suites
+	// apply to it.
+	Tests ImageTestsConfig `toml:"tests,omitempty" json:"tests,omitempty" jsonschema:"title=Tests,description=Test configuration for this image"`
 }
 
-// ImageTestRef is a reference from an image to a named test suite. Using a structured
-// type (rather than a bare string) allows per-test metadata to be added later without
-// a breaking config change.
-type ImageTestRef struct {
+// ImageTestsConfig holds the test-related configuration for an image.
+type ImageTestsConfig struct {
+	// TestSuites is the list of test suite references that apply to this image. Each
+	// reference identifies a test suite defined in the top-level [test-suites] section
+	// and may carry per-test metadata in the future (e.g., required vs optional).
+	TestSuites []TestSuiteRef `toml:"test-suites,omitempty" json:"testSuites,omitempty" jsonschema:"title=Test Suites,description=List of test suite references that apply to this image"`
+}
+
+// TestSuiteRef is a reference to a named test suite. Using a structured type (rather than
+// a bare string) allows per-test metadata to be added later without a breaking config change.
+type TestSuiteRef struct {
 	// Name is the key into the top-level [tests] map.
 	Name string `toml:"name" json:"name" jsonschema:"required,title=Name,description=Name of the test suite (must match a key in [tests])"`
 }
 
 // TestNames returns the test suite names referenced by this image.
 func (i *ImageConfig) TestNames() []string {
-	names := make([]string, len(i.Tests))
-	for idx, ref := range i.Tests {
+	names := make([]string, len(i.Tests.TestSuites))
+	for idx, ref := range i.Tests.TestSuites {
 		names[idx] = ref.Name
 	}
 
