@@ -25,9 +25,54 @@ type ImageConfig struct {
 	// Where to find its definition.
 	Definition ImageDefinition `toml:"definition,omitempty" json:"definition,omitempty" jsonschema:"title=Definition,description=Identifies where to find the definition for this image"`
 
+	// Capabilities describes the features and properties of this image.
+	Capabilities ImageCapabilities `toml:"capabilities,omitempty" json:"capabilities,omitempty" jsonschema:"title=Capabilities,description=Features and properties of this image"`
+
 	// Tests holds the test configuration for this image, including which test suites
 	// apply to it.
 	Tests ImageTestsConfig `toml:"tests,omitempty" json:"tests,omitempty" jsonschema:"title=Tests,description=Test configuration for this image"`
+}
+
+// ImageCapabilities describes the features and properties of an image. Boolean fields
+// use *bool to distinguish "explicitly true", "explicitly false", and "unspecified"
+// (nil). This tristate enables correct merge semantics (unspecified inherits, false
+// overrides) and detection of underspecification.
+type ImageCapabilities struct {
+	// MachineBootable indicates whether the image can be booted on a machine (bare metal,
+	// VM, etc.). Images that lack a kernel are not machine-bootable.
+	MachineBootable *bool `toml:"machine-bootable,omitempty" json:"machineBootable,omitempty" jsonschema:"title=Machine bootable,description=Whether the image can be booted on a machine (bare metal or VM)"`
+
+	// ContainerRunnable indicates whether the image can be run on an OCI container host.
+	ContainerRunnable *bool `toml:"container-runnable,omitempty" json:"containerRunnable,omitempty" jsonschema:"title=Container runnable,description=Whether the image can be run on an OCI container host"`
+
+	// Systemd indicates whether the image runs systemd as its init system.
+	Systemd *bool `toml:"systemd,omitempty" json:"systemd,omitempty" jsonschema:"title=Systemd,description=Whether the image runs systemd as its init system"`
+
+	// RuntimePackageManagement indicates whether the image supports installing or
+	// removing packages at runtime (e.g., via dnf/tdnf).
+	RuntimePackageManagement *bool `toml:"runtime-package-management,omitempty" json:"runtimePackageManagement,omitempty" jsonschema:"title=Runtime package management,description=Whether the image supports installing or removing packages at runtime"`
+}
+
+// IsMachineBootable returns true if the image is explicitly marked as machine-bootable.
+func (c *ImageCapabilities) IsMachineBootable() bool {
+	return c.MachineBootable != nil && *c.MachineBootable
+}
+
+// IsContainerRunnable returns true if the image is explicitly marked as runnable on
+// an OCI container host.
+func (c *ImageCapabilities) IsContainerRunnable() bool {
+	return c.ContainerRunnable != nil && *c.ContainerRunnable
+}
+
+// IsSystemd returns true if the image explicitly runs systemd.
+func (c *ImageCapabilities) IsSystemd() bool {
+	return c.Systemd != nil && *c.Systemd
+}
+
+// IsRuntimePackageManagement returns true if the image explicitly supports runtime
+// package management.
+func (c *ImageCapabilities) IsRuntimePackageManagement() bool {
+	return c.RuntimePackageManagement != nil && *c.RuntimePackageManagement
 }
 
 // ImageTestsConfig holds the test-related configuration for an image.
@@ -98,6 +143,7 @@ func (i *ImageConfig) WithAbsolutePaths(referenceDir string) *ImageConfig {
 		Description:      i.Description,
 		SourceConfigFile: i.SourceConfigFile,
 		Definition:       deep.MustCopy(i.Definition),
+		Capabilities:     deep.MustCopy(i.Capabilities),
 		Tests:            deep.MustCopy(i.Tests),
 	}
 
