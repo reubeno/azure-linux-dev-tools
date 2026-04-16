@@ -75,6 +75,30 @@ func (c *ImageCapabilities) IsRuntimePackageManagement() bool {
 	return c.RuntimePackageManagement != nil && *c.RuntimePackageManagement
 }
 
+// EnabledNames returns the TOML field names of capabilities that are explicitly set to
+// true, in a stable order matching the struct field declaration order.
+func (c *ImageCapabilities) EnabledNames() []string {
+	var names []string
+
+	if c.IsMachineBootable() {
+		names = append(names, "machine-bootable")
+	}
+
+	if c.IsContainerRunnable() {
+		names = append(names, "container-runnable")
+	}
+
+	if c.IsSystemd() {
+		names = append(names, "systemd")
+	}
+
+	if c.IsRuntimePackageManagement() {
+		names = append(names, "runtime-package-management")
+	}
+
+	return names
+}
+
 // ImageTestsConfig holds the test-related configuration for an image.
 type ImageTestsConfig struct {
 	// TestSuites is the list of test suite references that apply to this image. Each
