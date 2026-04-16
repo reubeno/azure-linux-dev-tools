@@ -172,7 +172,7 @@ func runImageTest(env *azldev.Env, options *ImageTestOptions) error {
 			return err
 		}
 
-		if err := runTestSuite(env, testConfig, options); err != nil {
+		if err := runTestSuite(env, testConfig, imageConfig, options); err != nil {
 			slog.Error("Test suite failed",
 				slog.String("suite", suiteName),
 				slog.Any("error", err),
@@ -228,11 +228,12 @@ func resolveTestSuiteByName(
 
 // runTestSuite dispatches a single test suite to the appropriate runner.
 func runTestSuite(
-	env *azldev.Env, testConfig *projectconfig.TestConfig, options *ImageTestOptions,
+	env *azldev.Env, testConfig *projectconfig.TestConfig,
+	imageConfig *projectconfig.ImageConfig, options *ImageTestOptions,
 ) error {
 	switch testConfig.Type {
 	case projectconfig.TestTypePytest:
-		return RunPytestSuite(env, testConfig, options)
+		return RunPytestSuite(env, testConfig, imageConfig, options)
 
 	case projectconfig.TestTypeLisa:
 		return runLisaSuite(env, testConfig, options)

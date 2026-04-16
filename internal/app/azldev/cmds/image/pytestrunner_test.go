@@ -14,6 +14,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testImageConfig returns a minimal [projectconfig.ImageConfig] for use in tests.
+func testImageConfig() *projectconfig.ImageConfig {
+	return &projectconfig.ImageConfig{
+		Name: "test-image",
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func TestBuildNativePytestArgs_BasicTestPaths(t *testing.T) {
 	pytestConfig := &projectconfig.PytestConfig{
 		TestPaths: []string{"cases/", "other/"},
@@ -23,7 +34,7 @@ func TestBuildNativePytestArgs_BasicTestPaths(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(pytestConfig, options)
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
 
 	assert.Equal(t, []string{"cases/", "other/", "--image-path", "/images/test.raw"}, args)
 }
@@ -46,7 +57,7 @@ func TestBuildNativePytestArgs_GlobExpansion(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(pytestConfig, options)
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
 
 	assert.Contains(t, args, filepath.Join("cases", "test_alpha.py"))
 	assert.Contains(t, args, filepath.Join("cases", "test_beta.py"))
@@ -66,7 +77,7 @@ func TestBuildNativePytestArgs_GlobNoMatch(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(pytestConfig, options)
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
 
 	// Original pattern preserved when no matches.
 	assert.Equal(t, []string{"cases/test_*.py"}, args)
@@ -80,7 +91,7 @@ func TestBuildNativePytestArgs_ExtraArgsNeverGlobExpanded(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(pytestConfig, options)
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
 
 	// Glob chars in extra-args should be passed verbatim.
 	assert.Equal(t, []string{"--pattern", "test_*.py"}, args)
@@ -96,7 +107,7 @@ func TestBuildNativePytestArgs_JUnitXMLAppended(t *testing.T) {
 		JUnitXMLPath: "/output/results.xml",
 	}
 
-	args := image.BuildNativePytestArgs(pytestConfig, options)
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
 
 	assert.Equal(t, []string{
 		"cases/",
@@ -113,7 +124,7 @@ func TestBuildNativePytestArgs_NoJUnitXMLWhenNotRequested(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(pytestConfig, options)
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
 
 	assert.NotContains(t, args, "--junit-xml")
 }
@@ -124,7 +135,7 @@ func TestBuildNativePytestArgs_EmptyConfig(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(pytestConfig, options)
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
 	assert.Empty(t, args)
 }
 
@@ -137,9 +148,66 @@ func TestBuildNativePytestArgs_PlaceholderNotInTestPaths(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	args := image.BuildNativePytestArgs(pytestConfig, options)
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
 
 	assert.Equal(t, []string{"{image-path}"}, args)
+}
+
+func TestBuildNativePytestArgs_ImageNamePlaceholder(t *testing.T) {
+	pytestConfig := &projectconfig.PytestConfig{
+		ExtraArgs: []string{"--image-name", "{image-name}"},
+	}
+	options := &image.ImageTestOptions{
+		ImageName: "vm-base",
+		ImagePath: "/images/test.raw",
+	}
+
+	args := image.BuildNativePytestArgs(pytestConfig, testImageConfig(), options)
+
+	assert.Equal(t, []string{"--image-name", "vm-base"}, args)
+}
+
+func TestBuildNativePytestArgs_CapabilitiesPlaceholder(t *testing.T) {
+	imgConfig := &projectconfig.ImageConfig{
+		Name: "vm-base",
+		Capabilities: projectconfig.ImageCapabilities{
+			MachineBootable:          boolPtr(true),
+			ContainerRunnable:        boolPtr(false),
+			Systemd:                  boolPtr(true),
+			RuntimePackageManagement: boolPtr(true),
+		},
+	}
+	pytestConfig := &projectconfig.PytestConfig{
+		ExtraArgs: []string{"--capabilities", "{capabilities}"},
+	}
+	options := &image.ImageTestOptions{
+		ImagePath: "/images/test.raw",
+	}
+
+	args := image.BuildNativePytestArgs(pytestConfig, imgConfig, options)
+
+	assert.Equal(t, []string{"--capabilities", "machine-bootable,systemd,runtime-package-management"}, args)
+}
+
+func TestBuildNativePytestArgs_CapabilitiesEmpty(t *testing.T) {
+	imgConfig := &projectconfig.ImageConfig{
+		Name: "distroless",
+		Capabilities: projectconfig.ImageCapabilities{
+			MachineBootable:          boolPtr(false),
+			ContainerRunnable:        boolPtr(true),
+			RuntimePackageManagement: boolPtr(false),
+		},
+	}
+	pytestConfig := &projectconfig.PytestConfig{
+		ExtraArgs: []string{"--capabilities", "{capabilities}"},
+	}
+	options := &image.ImageTestOptions{
+		ImagePath: "/images/test.raw",
+	}
+
+	args := image.BuildNativePytestArgs(pytestConfig, imgConfig, options)
+
+	assert.Equal(t, []string{"--capabilities", "container-runnable"}, args)
 }
 
 func TestRunPytestSuite_MissingPytestConfig(t *testing.T) {
@@ -152,7 +220,7 @@ func TestRunPytestSuite_MissingPytestConfig(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	err := image.RunPytestSuite(nil, testConfig, options)
+	err := image.RunPytestSuite(nil, testConfig, testImageConfig(), options)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing pytest configuration")
 }

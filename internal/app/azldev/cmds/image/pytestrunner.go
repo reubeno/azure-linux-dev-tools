@@ -25,14 +25,18 @@ const (
 	// venvDirName is the name of the venv directory created under the azldev work dir.
 	venvDirName = "pytest-venv"
 
-	// imagePlaceholder is the placeholder token in pytest extra-args that gets replaced with
-	// the actual image path at runtime.
+	// imagePlaceholder is the placeholder token for the image path.
 	imagePlaceholder = "{image-path}"
+	// imageNamePlaceholder is the placeholder token for the image name.
+	imageNamePlaceholder = "{image-name}"
+	// capabilitiesPlaceholder is the placeholder token for the comma-delimited capabilities.
+	capabilitiesPlaceholder = "{capabilities}"
 )
 
 // RunPytestSuite runs a pytest-based test suite natively using a Python venv.
 func RunPytestSuite(
-	env *azldev.Env, testConfig *projectconfig.TestConfig, options *ImageTestOptions,
+	env *azldev.Env, testConfig *projectconfig.TestConfig,
+	imageConfig *projectconfig.ImageConfig, options *ImageTestOptions,
 ) error {
 	pytestConfig := testConfig.Pytest
 	if pytestConfig == nil {
@@ -69,7 +73,7 @@ func RunPytestSuite(
 	}
 
 	// Build the pytest command: expand test paths, substitute placeholders in extra args.
-	pytestArgs := BuildNativePytestArgs(pytestConfig, options)
+	pytestArgs := BuildNativePytestArgs(pytestConfig, imageConfig, options)
 
 	slog.Info("Running pytest", slog.Any("args", pytestArgs))
 
@@ -191,11 +195,22 @@ func installPytestDependencies(env *azldev.Env, venvPython string, workingDir st
 // Test paths are glob-expanded relative to the working directory. Extra args are passed
 // verbatim after placeholder substitution. The --junit-xml flag is appended automatically
 // when requested via CLI.
-func BuildNativePytestArgs(pytestConfig *projectconfig.PytestConfig, options *ImageTestOptions) []string {
+func BuildNativePytestArgs(
+	pytestConfig *projectconfig.PytestConfig,
+	imageConfig *projectconfig.ImageConfig,
+	options *ImageTestOptions,
+) []string {
 	absImagePath, err := filepath.Abs(options.ImagePath)
 	if err != nil {
 		absImagePath = options.ImagePath
 	}
+
+	// Build a replacer for all known placeholders.
+	replacer := strings.NewReplacer(
+		imagePlaceholder, absImagePath,
+		imageNamePlaceholder, options.ImageName,
+		capabilitiesPlaceholder, strings.Join(imageConfig.Capabilities.EnabledNames(), ","),
+	)
 
 	args := make([]string, 0, len(pytestConfig.TestPaths)+len(pytestConfig.ExtraArgs))
 
@@ -206,7 +221,7 @@ func BuildNativePytestArgs(pytestConfig *projectconfig.PytestConfig, options *Im
 
 	// Substitute placeholders in extra args (never glob-expanded).
 	for _, arg := range pytestConfig.ExtraArgs {
-		args = append(args, strings.ReplaceAll(arg, imagePlaceholder, absImagePath))
+		args = append(args, replacer.Replace(arg))
 	}
 
 	// Append --junit-xml when requested via CLI.
