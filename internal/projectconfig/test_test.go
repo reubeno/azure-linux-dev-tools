@@ -11,6 +11,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// validTestSHA is a 40-character hex string for use in tests.
+const validTestSHA = "abcdef0123456789abcdef0123456789abcdef01"
+
+// validLisaConfig returns a valid [projectconfig.LisaConfig] for use in tests.
+func validLisaConfig() *projectconfig.LisaConfig {
+	return &projectconfig.LisaConfig{
+		Framework: projectconfig.GitSourceConfig{
+			GitURL: "https://github.com/microsoft/lisa.git",
+			Ref:    validTestSHA,
+		},
+		Runbook: projectconfig.LisaRunbookConfig{
+			GitSourceConfig: projectconfig.GitSourceConfig{
+				GitURL: "https://github.com/microsoft/azurelinux.git",
+				Ref:    validTestSHA,
+			},
+			Path: "tests/lisa/runbooks/azl-qemu.yml",
+		},
+	}
+}
+
 func TestTestConfig_Validate(t *testing.T) {
 	t.Run("valid pytest config", func(t *testing.T) {
 		testConfig := projectconfig.TestConfig{
@@ -29,10 +49,7 @@ func TestTestConfig_Validate(t *testing.T) {
 		testConfig := projectconfig.TestConfig{
 			Name: "integration",
 			Type: projectconfig.TestTypeLisa,
-			Lisa: &projectconfig.LisaConfig{
-				RunbookPath:         "/runbooks/basic.yml",
-				AdminPrivateKeyPath: "/keys/admin",
-			},
+			Lisa: validLisaConfig(),
 		}
 		assert.NoError(t, testConfig.Validate())
 	})
@@ -53,10 +70,7 @@ func TestTestConfig_Validate(t *testing.T) {
 			Name:   "smoke",
 			Type:   projectconfig.TestTypePytest,
 			Pytest: &projectconfig.PytestConfig{},
-			Lisa: &projectconfig.LisaConfig{
-				RunbookPath:         "/runbooks/basic.yml",
-				AdminPrivateKeyPath: "/keys/admin",
-			},
+			Lisa:   validLisaConfig(),
 		}
 		err := testConfig.Validate()
 		require.Error(t, err)
@@ -74,42 +88,52 @@ func TestTestConfig_Validate(t *testing.T) {
 		assert.Contains(t, err.Error(), "[lisa]")
 	})
 
-	t.Run("lisa missing runbook", func(t *testing.T) {
+	t.Run("lisa missing framework git-url", func(t *testing.T) {
+		cfg := validLisaConfig()
+		cfg.Framework.GitURL = ""
 		testConfig := projectconfig.TestConfig{
 			Name: "integration",
 			Type: projectconfig.TestTypeLisa,
-			Lisa: &projectconfig.LisaConfig{
-				AdminPrivateKeyPath: "/keys/admin",
-			},
+			Lisa: cfg,
 		}
 		err := testConfig.Validate()
 		require.Error(t, err)
 		require.ErrorIs(t, err, projectconfig.ErrMissingTestField)
-		assert.Contains(t, err.Error(), "runbook")
+		assert.Contains(t, err.Error(), "git-url")
 	})
 
-	t.Run("lisa missing admin-private-key-path", func(t *testing.T) {
+	t.Run("lisa invalid framework ref", func(t *testing.T) {
+		cfg := validLisaConfig()
+		cfg.Framework.Ref = "not-a-sha"
 		testConfig := projectconfig.TestConfig{
 			Name: "integration",
 			Type: projectconfig.TestTypeLisa,
-			Lisa: &projectconfig.LisaConfig{
-				RunbookPath: "/runbooks/basic.yml",
-			},
+			Lisa: cfg,
+		}
+		err := testConfig.Validate()
+		require.Error(t, err)
+		require.ErrorIs(t, err, projectconfig.ErrInvalidGitRef)
+	})
+
+	t.Run("lisa missing runbook path", func(t *testing.T) {
+		cfg := validLisaConfig()
+		cfg.Runbook.Path = ""
+		testConfig := projectconfig.TestConfig{
+			Name: "integration",
+			Type: projectconfig.TestTypeLisa,
+			Lisa: cfg,
 		}
 		err := testConfig.Validate()
 		require.Error(t, err)
 		require.ErrorIs(t, err, projectconfig.ErrMissingTestField)
-		assert.Contains(t, err.Error(), "admin-private-key-path")
+		assert.Contains(t, err.Error(), "path")
 	})
 
 	t.Run("lisa with pytest subtable", func(t *testing.T) {
 		testConfig := projectconfig.TestConfig{
-			Name: "integration",
-			Type: projectconfig.TestTypeLisa,
-			Lisa: &projectconfig.LisaConfig{
-				RunbookPath:         "/runbooks/basic.yml",
-				AdminPrivateKeyPath: "/keys/admin",
-			},
+			Name:   "integration",
+			Type:   projectconfig.TestTypeLisa,
+			Lisa:   validLisaConfig(),
 			Pytest: &projectconfig.PytestConfig{},
 		}
 		err := testConfig.Validate()

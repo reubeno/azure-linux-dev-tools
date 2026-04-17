@@ -4,6 +4,7 @@
 package projectconfig
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -32,6 +33,8 @@ var (
 	// ErrMismatchedTestSubtable is returned when a test config has a subtable that does not
 	// match its declared type.
 	ErrMismatchedTestSubtable = errors.New("mismatched test subtable")
+	// ErrInvalidGitRef is returned when a git ref is not a valid hex commit SHA.
+	ErrInvalidGitRef = errors.New("invalid git ref")
 )
 
 // TestConfig defines a named test suite.
@@ -74,11 +77,88 @@ type PytestConfig struct {
 
 // LisaConfig holds configuration specific to LISA-based test suites.
 type LisaConfig struct {
-	// RunbookPath is the path to a LISA runbook YAML file.
-	RunbookPath string `toml:"runbook" json:"runbook" jsonschema:"required,title=Runbook path,description=Path to the LISA runbook file"`
+	// Framework identifies the git source for the LISA framework itself.
+	Framework GitSourceConfig `toml:"framework" json:"framework" jsonschema:"required,title=Framework,description=Git source for the LISA framework"`
 
-	// AdminPrivateKeyPath is the path to the admin SSH private key file for LISA.
-	AdminPrivateKeyPath string `toml:"admin-private-key-path" json:"adminPrivateKeyPath" jsonschema:"required,title=Admin private key path,description=Path to the admin SSH private key file"`
+	// Runbook identifies the git source and path for the LISA runbook to run.
+	Runbook LisaRunbookConfig `toml:"runbook" json:"runbook" jsonschema:"required,title=Runbook,description=Git source and path for the LISA runbook"`
+
+	// PipPreInstall lists pip packages to install before the LISA framework itself.
+	// This can be used to override framework version pins that conflict with the local
+	// environment (e.g., installing a system-matching libvirt-python version).
+	PipPreInstall []string `toml:"pip-pre-install,omitempty" json:"pipPreInstall,omitempty" jsonschema:"title=Pip pre-install,description=Pip packages to install before the framework (for overriding version pins)"`
+
+	// PipExtras lists pip extras to install from the LISA framework package (e.g., "azure",
+	// "legacy"). These are appended to the pip install command as pip install -e ".[extra1,extra2]".
+	PipExtras []string `toml:"pip-extras,omitempty" json:"pipExtras,omitempty" jsonschema:"title=Pip extras,description=Pip extras to install from the LISA framework package"`
+
+	// ExtraArgs is the list of additional arguments to pass to LISA. These are passed
+	// verbatim after placeholder substitution. Supports {image-path}, {image-name},
+	// and {capabilities} placeholders.
+	ExtraArgs []string `toml:"extra-args,omitempty" json:"extraArgs,omitempty" jsonschema:"title=Extra arguments,description=Additional arguments passed to LISA. Supports {image-path} {image-name} {capabilities} placeholders."`
+}
+
+// GitSourceConfig identifies a git repository at a specific commit.
+type GitSourceConfig struct {
+	// GitURL is the URL of the git repository.
+	GitURL string `toml:"git-url" json:"gitUrl" jsonschema:"required,title=Git URL,description=URL of the git repository"`
+
+	// Ref is the commit SHA to check out. Must be a full hex commit hash.
+	Ref string `toml:"ref" json:"ref" jsonschema:"required,title=Ref,description=Commit SHA to check out (full hex hash)"`
+}
+
+// Validate checks that the [GitSourceConfig] has required fields and a valid ref.
+func (g *GitSourceConfig) Validate(context string) error {
+	if g.GitURL == "" {
+		return fmt.Errorf("%w: %s requires 'git-url'", ErrMissingTestField, context)
+	}
+
+	if g.Ref == "" {
+		return fmt.Errorf("%w: %s requires 'ref'", ErrMissingTestField, context)
+	}
+
+	if err := validateCommitSHA(g.Ref); err != nil {
+		return fmt.Errorf("%s: %w", context, err)
+	}
+
+	return nil
+}
+
+// LisaRunbookConfig identifies a LISA runbook within a git repository.
+type LisaRunbookConfig struct {
+	GitSourceConfig `toml:",inline"`
+
+	// Path is the path to the runbook YAML file within the repository.
+	Path string `toml:"path" json:"path" jsonschema:"required,title=Path,description=Path to the runbook YAML file within the repository"`
+}
+
+// Validate checks that the [LisaRunbookConfig] has required fields.
+func (r *LisaRunbookConfig) Validate(context string) error {
+	if err := r.GitSourceConfig.Validate(context); err != nil {
+		return err
+	}
+
+	if r.Path == "" {
+		return fmt.Errorf("%w: %s requires 'path'", ErrMissingTestField, context)
+	}
+
+	return nil
+}
+
+// validateCommitSHA checks that s is a valid full-length hex commit SHA (40 characters).
+func validateCommitSHA(ref string) error {
+	const commitSHALength = 40
+
+	if len(ref) != commitSHALength {
+		return fmt.Errorf("%w: expected %d hex characters, got %d: %#q",
+			ErrInvalidGitRef, commitSHALength, len(ref), ref)
+	}
+
+	if _, err := hex.DecodeString(ref); err != nil {
+		return fmt.Errorf("%w: not a valid hex string: %#q", ErrInvalidGitRef, ref)
+	}
+
+	return nil
 }
 
 // Validate checks that the test config has valid type-specific required fields and that
@@ -102,14 +182,14 @@ func (t *TestConfig) Validate() error {
 				ErrMissingTestField, t.Name, t.Type)
 		}
 
-		if t.Lisa.RunbookPath == "" {
-			return fmt.Errorf("%w: test %#q of type %#q requires 'runbook'",
-				ErrMissingTestField, t.Name, t.Type)
+		frameworkContext := fmt.Sprintf("test %#q lisa.framework", t.Name)
+		if err := t.Lisa.Framework.Validate(frameworkContext); err != nil {
+			return err
 		}
 
-		if t.Lisa.AdminPrivateKeyPath == "" {
-			return fmt.Errorf("%w: test %#q of type %#q requires 'admin-private-key-path'",
-				ErrMissingTestField, t.Name, t.Type)
+		runbookContext := fmt.Sprintf("test %#q lisa.runbook", t.Name)
+		if err := t.Lisa.Runbook.Validate(runbookContext); err != nil {
+			return err
 		}
 
 		if t.Pytest != nil {
@@ -154,8 +234,11 @@ func (t *TestConfig) WithAbsolutePaths(referenceDir string) *TestConfig {
 
 	if t.Lisa != nil {
 		result.Lisa = &LisaConfig{
-			RunbookPath:         makeAbsolute(referenceDir, t.Lisa.RunbookPath),
-			AdminPrivateKeyPath: makeAbsolute(referenceDir, t.Lisa.AdminPrivateKeyPath),
+			Framework:     t.Lisa.Framework,
+			Runbook:       t.Lisa.Runbook,
+			PipPreInstall: t.Lisa.PipPreInstall,
+			PipExtras:     t.Lisa.PipExtras,
+			ExtraArgs:     t.Lisa.ExtraArgs,
 		}
 	}
 

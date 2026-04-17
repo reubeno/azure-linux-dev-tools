@@ -815,8 +815,16 @@ type = "lisa"
 description = "LISA integration tests"
 
 [test-suites.integration.lisa]
-runbook = "runbooks/basic.yml"
-admin-private-key-path = "keys/admin"
+extra-args = ["-v", "qcow2:{image-path}"]
+
+[test-suites.integration.lisa.framework]
+git-url = "https://github.com/microsoft/lisa.git"
+ref = "abcdef0123456789abcdef0123456789abcdef01"
+
+[test-suites.integration.lisa.runbook]
+git-url = "https://github.com/microsoft/azurelinux.git"
+ref = "abcdef0123456789abcdef0123456789abcdef01"
+path = "tests/lisa/runbooks/azl-qemu.yml"
 `
 
 	configDir := filepath.Dir(testConfigPath)
@@ -848,8 +856,11 @@ admin-private-key-path = "keys/admin"
 		assert.Equal(t, TestTypeLisa, lisaTest.Type)
 		assert.Equal(t, "LISA integration tests", lisaTest.Description)
 		require.NotNil(t, lisaTest.Lisa)
-		assert.Equal(t, filepath.Join(configDir, "runbooks/basic.yml"), lisaTest.Lisa.RunbookPath)
-		assert.Equal(t, filepath.Join(configDir, "keys/admin"), lisaTest.Lisa.AdminPrivateKeyPath)
+		assert.Equal(t, "https://github.com/microsoft/lisa.git", lisaTest.Lisa.Framework.GitURL)
+		assert.Equal(t, "abcdef0123456789abcdef0123456789abcdef01", lisaTest.Lisa.Framework.Ref)
+		assert.Equal(t, "https://github.com/microsoft/azurelinux.git", lisaTest.Lisa.Runbook.GitURL)
+		assert.Equal(t, "tests/lisa/runbooks/azl-qemu.yml", lisaTest.Lisa.Runbook.Path)
+		assert.Equal(t, []string{"-v", "qcow2:{image-path}"}, lisaTest.Lisa.ExtraArgs)
 	}
 }
 

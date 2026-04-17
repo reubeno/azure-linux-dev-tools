@@ -7,9 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -19,14 +16,6 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
-)
-
-const (
-	// testRunnerLisa is the LISA test framework identifier.
-	testRunnerLisa = "lisa"
-
-	// testImagePrefix is the prefix used for qcow2 images created during image testing.
-	testImagePrefix = "azldevtest"
 )
 
 // ImageTestOptions holds the options for the 'image test' command.
@@ -236,130 +225,11 @@ func runTestSuite(
 		return RunPytestSuite(env, testConfig, imageConfig, options)
 
 	case projectconfig.TestTypeLisa:
-		return runLisaSuite(env, testConfig, options)
+		return RunLisaSuite(env, testConfig, imageConfig, options)
 
 	default:
 		return fmt.Errorf("unsupported test type %#q for test suite %#q", testConfig.Type, testConfig.Name)
 	}
-}
-
-// runLisaSuite runs a LISA-based test suite.
-func runLisaSuite(env *azldev.Env, testConfig *projectconfig.TestConfig, options *ImageTestOptions) error {
-	lisaConfig := testConfig.Lisa
-	if lisaConfig == nil {
-		return fmt.Errorf("test %#q is missing lisa configuration", testConfig.Name)
-	}
-
-	// Validate LISA-specific prerequisites.
-	if err := checkLisaInstalled(env); err != nil {
-		return err
-	}
-
-	if err := validateFileExists(env.FS(), lisaConfig.AdminPrivateKeyPath); err != nil {
-		return fmt.Errorf("admin-private-key-path for test %#q:\n%w", testConfig.Name, err)
-	}
-
-	// Resolve the image to qcow2 format (LISA requires it).
-	qcow2Path, err := ResolveQcow2Image(env, options.ImagePath)
-	if err != nil {
-		return err
-	}
-
-	return runLisa(env, lisaConfig.RunbookPath, qcow2Path, lisaConfig.AdminPrivateKeyPath)
-}
-
-// CheckTestRunner returns an error if the test runner is not supported.
-func CheckTestRunner(runner string) error {
-	if !strings.EqualFold(runner, testRunnerLisa) {
-		return fmt.Errorf("test runner %#q is not supported; only %#q is supported at this time", runner, testRunnerLisa)
-	}
-
-	return nil
-}
-
-// checkLisaInstalled verifies that the lisa executable is available on the host.
-func checkLisaInstalled(env *azldev.Env) error {
-	if !env.CommandInSearchPath(testRunnerLisa) {
-		return errors.New("'lisa' is not installed or not found in PATH; " +
-			"please install LISA before running image tests")
-	}
-
-	return nil
-}
-
-// ResolveQcow2Image inspects the image at imagePath and returns a path to a qcow2 image.
-// If the image is already qcow2 it is returned as-is. If it is vhd or vhdfixed it is
-// converted to qcow2 in a temporary directory. Any other format is an error.
-func ResolveQcow2Image(env *azldev.Env, imagePath string) (string, error) {
-	format, err := InferImageFormat(imagePath)
-	if err != nil {
-		return "", err
-	}
-
-	switch format {
-	case string(ImageFormatQcow2):
-		slog.Info("Image is already in qcow2 format, using as-is", slog.String("path", imagePath))
-
-		return imagePath, nil
-
-	case string(ImageFormatVhd):
-		return convertToQcow2(env, imagePath)
-
-	default:
-		return "", fmt.Errorf(
-			"image format %#q is not supported for testing; supported formats: qcow2, vhd, vhdfixed",
-			format,
-		)
-	}
-}
-
-// convertToQcow2 converts a vhd/vhdfixed disk image to qcow2 format using qemu-img and
-// returns the path to the converted file. The converted image is written alongside the
-// source file and is the caller's responsibility to clean up (or accept it as a leftover).
-func convertToQcow2(env *azldev.Env, srcPath string) (string, error) {
-	if !env.CommandInSearchPath("qemu-img") {
-		return "", errors.New("'qemu-img' is not installed or not found in PATH; " +
-			"it is required to convert vhd/vhdfixed images to qcow2")
-	}
-
-	baseName := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
-	destFileName := baseName + ".qcow2"
-
-	// Write the converted image alongside the source file so the path is predictable.
-	destPath := filepath.Join(filepath.Dir(srcPath), testImagePrefix+"-"+destFileName)
-
-	slog.Info("Converting image to qcow2",
-		slog.String("src", srcPath),
-		slog.String("dest", destPath),
-	)
-
-	if env.DryRun() {
-		slog.Info("Dry-run: would convert image to qcow2",
-			slog.String("src", srcPath),
-			slog.String("dest", destPath),
-		)
-
-		return destPath, nil
-	}
-
-	convertCmd := exec.CommandContext(
-		env, "qemu-img", "convert", "-O", "qcow2", srcPath, destPath,
-	)
-	convertCmd.Stdout = os.Stdout
-	convertCmd.Stderr = os.Stderr
-
-	cmd, err := env.Command(convertCmd)
-	if err != nil {
-		return "", fmt.Errorf("failed to create qemu-img command:\n%w", err)
-	}
-
-	if err = cmd.Run(env); err != nil {
-		return "", fmt.Errorf("failed to convert image %#q to qcow2:\n%w", srcPath, err)
-	}
-
-	slog.Info("Conversion complete", slog.String("dest", destPath))
-
-	return destPath, nil
 }
 
 // validateFileExists returns an error if the path does not point to an existing regular file.
@@ -380,40 +250,6 @@ func validateFileExists(fs opctx.FS, path string) error {
 
 	if !exists {
 		return fmt.Errorf("file not found: %#q", path)
-	}
-
-	return nil
-}
-
-// runLisa executes `lisa -r <runbookPath> -v "qcow2:<imagePath>"` and streams its
-// stdout and stderr directly to the terminal.
-func runLisa(env *azldev.Env, runbookPath, qcow2ImagePath, adminPrivateKeyPath string) error {
-	slog.Info("Running LISA tests",
-		slog.String("runbook", runbookPath),
-		slog.String("image", qcow2ImagePath),
-	)
-
-	args := []string{
-		"-r", runbookPath,
-		"-v", "qcow2:" + qcow2ImagePath,
-		"-v", "admin_private_key_file:" + adminPrivateKeyPath,
-	}
-
-	lisaCmd := exec.CommandContext(
-		env,
-		testRunnerLisa,
-		args...,
-	)
-	lisaCmd.Stdout = os.Stdout
-	lisaCmd.Stderr = os.Stderr
-
-	cmd, err := env.Command(lisaCmd)
-	if err != nil {
-		return fmt.Errorf("failed to create lisa command:\n%w", err)
-	}
-
-	if err = cmd.Run(env); err != nil {
-		return fmt.Errorf("lisa test run failed:\n%w", err)
 	}
 
 	return nil
