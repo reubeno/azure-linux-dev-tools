@@ -66,7 +66,15 @@ For pytest tests, azldev creates a Python virtual environment, installs
 dependencies from pyproject.toml in the working directory, and runs pytest
 with the configured test paths and extra arguments. Use {image-path} in
 extra-args to insert the image path. Glob patterns (including **) in
-test-paths are expanded automatically.`,
+test-paths are expanded automatically.
+
+For tmt tests, azldev clones the configured source repo at the pinned ref,
+creates a per-suite Python venv, installs tmt with the appropriate provision
+plugin, optionally converts the image-under-test to qcow2, and invokes tmt
+against the configured plan with a managed --image override. Each invocation
+gets a fresh, uniquely-named run directory under the project work dir;
+azldev emits an azldev-results.json next to the run with structured per-test
+results.`,
 		Example: `  # Run all test suites for an image (artifact auto-resolved from output dir)
   azldev image test vm-base
 
@@ -85,7 +93,7 @@ test-paths are expanded automatically.`,
 		RunE: azldev.RunFuncWithExtraArgs(func(env *azldev.Env, args []string) (interface{}, error) {
 			options.ImageName = args[0]
 
-			return nil, runImageTest(env, options)
+			return runImageTest(env, options)
 		}),
 		ValidArgsFunction: generateImageNameCompletions,
 	}
@@ -105,20 +113,42 @@ test-paths are expanded automatically.`,
 }
 
 // runImageTest resolves which test suites to run and dispatches each one.
-func runImageTest(env *azldev.Env, options *ImageTestOptions) error {
+func runImageTest(env *azldev.Env, options *ImageTestOptions) ([]ImageTestResult, error) {
 	cfg := env.Config()
 	if cfg == nil {
-		return errors.New("no project configuration loaded")
+		return nil, errors.New("no project configuration loaded")
 	}
 
 	// Resolve the image config from the positional argument.
 	imageConfig, err := ResolveImageByName(env, options.ImageName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Resolve image path: explicit --image-path takes precedence, otherwise resolve
-	// from the image name in the output directory.
+	if err := resolveImageTestPaths(env, options); err != nil {
+		return nil, err
+	}
+
+	// Determine which test suites to run.
+	suiteNames := resolveTestSuiteNames(imageConfig, options.TestSuites)
+
+	// Warn when explicitly requested suites are not referenced by the image config.
+	if len(options.TestSuites) > 0 {
+		warnUnassociatedSuites(options.ImageName, imageConfig, options.TestSuites)
+	}
+
+	if len(suiteNames) == 0 {
+		slog.Warn("No test suites to run for image", slog.String("image", options.ImageName))
+
+		return nil, nil
+	}
+
+	return dispatchSuites(env, cfg, imageConfig, options, suiteNames)
+}
+
+// resolveImageTestPaths resolves the image artifact path and absolutizes the JUnit-XML
+// path. Mutates options in place.
+func resolveImageTestPaths(env *azldev.Env, options *ImageTestOptions) error {
 	imagePath := options.ImagePath
 	if imagePath == "" {
 		var resolveErr error
@@ -134,7 +164,6 @@ func runImageTest(env *azldev.Env, options *ImageTestOptions) error {
 		)
 	}
 
-	// Validate that the image file exists.
 	if err := validateFileExists(env.FS(), imagePath); err != nil {
 		return fmt.Errorf("image path:\n%w", err)
 	}
@@ -153,34 +182,35 @@ func runImageTest(env *azldev.Env, options *ImageTestOptions) error {
 		options.JUnitXMLPath = absJUnitPath
 	}
 
-	// Determine which test suites to run.
-	suiteNames := resolveTestSuiteNames(imageConfig, options.TestSuites)
+	return nil
+}
 
-	// Warn when explicitly requested suites are not referenced by the image config.
-	if len(options.TestSuites) > 0 {
-		warnUnassociatedSuites(options.ImageName, imageConfig, options.TestSuites)
-	}
-
-	if len(suiteNames) == 0 {
-		slog.Warn("No test suites to run for image", slog.String("image", options.ImageName))
-
-		return nil
-	}
-
-	// Resolve and run each test suite, continuing past failures so all suites get a chance
-	// to run. Config/resolution errors abort immediately since they indicate a broken setup.
-	var testFailures []string
+// dispatchSuites resolves and runs each named test suite, accumulating results across
+// suites and continuing past test failures so all suites get a chance to run.
+// Config/resolution errors abort immediately since they indicate a broken setup.
+func dispatchSuites(
+	env *azldev.Env, cfg *projectconfig.ProjectConfig,
+	imageConfig *projectconfig.ImageConfig, options *ImageTestOptions,
+	suiteNames []string,
+) ([]ImageTestResult, error) {
+	var (
+		allResults   []ImageTestResult
+		testFailures []string
+	)
 
 	for _, suiteName := range suiteNames {
 		suiteConfig, err := resolveTestSuiteByName(cfg, suiteName)
 		if err != nil {
-			return err
+			return allResults, err
 		}
 
-		if err := runTestSuite(env, suiteConfig, imageConfig, options); err != nil {
+		results, runErr := runTestSuite(env, suiteConfig, imageConfig, options)
+		allResults = append(allResults, results...)
+
+		if runErr != nil {
 			slog.Error("Test suite failed",
 				slog.String("suite", suiteName),
-				slog.Any("error", err),
+				slog.Any("error", runErr),
 			)
 
 			testFailures = append(testFailures, suiteName)
@@ -188,11 +218,11 @@ func runImageTest(env *azldev.Env, options *ImageTestOptions) error {
 	}
 
 	if len(testFailures) > 0 {
-		return fmt.Errorf("%d of %d test suite(s) failed: %s",
+		return allResults, fmt.Errorf("%d of %d test suite(s) failed: %s",
 			len(testFailures), len(suiteNames), strings.Join(testFailures, ", "))
 	}
 
-	return nil
+	return allResults, nil
 }
 
 // resolveTestSuiteNames determines which test suites to run. If explicit names are
@@ -252,13 +282,16 @@ func resolveTestSuiteByName(
 func runTestSuite(
 	env *azldev.Env, suiteConfig *projectconfig.TestSuiteConfig,
 	imageConfig *projectconfig.ImageConfig, options *ImageTestOptions,
-) error {
+) ([]ImageTestResult, error) {
 	switch suiteConfig.Type {
 	case projectconfig.TestTypePytest:
 		return RunPytestSuite(env, suiteConfig, imageConfig, options)
 
+	case projectconfig.TestTypeTmt:
+		return RunTmtSuite(env, suiteConfig, imageConfig, options)
+
 	default:
-		return fmt.Errorf("unsupported test type %#q for test suite %#q", suiteConfig.Type, suiteConfig.Name)
+		return nil, fmt.Errorf("unsupported test type %#q for test suite %#q", suiteConfig.Type, suiteConfig.Name)
 	}
 }
 

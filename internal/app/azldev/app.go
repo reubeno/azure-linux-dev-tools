@@ -33,6 +33,11 @@ import (
 // Default name of the verbose log file.
 const defaultLogFilename = "azldev.log"
 
+// forcedExitCode is what we exit with when the user double-signals (e.g., presses
+// Ctrl-C twice) and we abandon graceful cleanup. Distinct from 0 (success) and 1
+// (normal command failure) so callers can identify a non-clean exit.
+const forcedExitCode = 130
+
 // Type of a callback function that can be registered for invocation after the application
 // has loaded configuration, but before it fully parses command-line arguments.
 type PostInitCallbackFunc func(app *App, env *Env) error
@@ -421,16 +426,50 @@ func (a *App) initializeProjectConfig(envOptions *EnvOptions, earlyTempDirPath s
 	return nil
 }
 
-// We cancel on normal exit from this function, as well as when a SIGINT or SIGTERM is received.
+// setupSignalHandling installs a signal handler that translates SIGINT, SIGTERM, and
+// SIGHUP into a context cancellation. It uses Go's idiomatic
+// [signal.Notify] + cancel pattern to give in-flight commands a chance to unwind
+// cleanly via their deferred cleanup.
+//
+// Two practical concerns this addresses:
+//
+//   - **SIGHUP from a closing terminal.** When azldev is launched from a script that
+//     itself exits (e.g., backgrounded with `&` from a non-interactive shell), the
+//     parent's death sends SIGHUP to azldev. Without an explicit handler, Go's runtime
+//     terminates the program *without running deferred functions* — so per-runner
+//     cleanup (libvirt guests, qcow2 images, etc.) is skipped. We catch SIGHUP so
+//     deferred cleanup runs.
+//
+//   - **Escape hatch on a second signal.** If a deferred cleanup itself hangs (e.g.,
+//     a stuck libvirt RPC), the user must be able to force-exit. After the first
+//     signal, the next SIGINT/SIGTERM/SIGHUP forces an unconditional [os.Exit].
+//     The forced-exit is logged so the user understands that cleanup may not have
+//     completed and can investigate the leaked artifacts manually.
 func (*App) setupSignalHandling(cancel context.CancelFunc) {
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, unix.SIGTERM)
+	signal.Notify(sigs, os.Interrupt, unix.SIGTERM, unix.SIGHUP)
 
 	go func() {
-		for sig := range sigs {
-			slog.Warn("Interrupt detected", "kind", sig)
-			cancel()
-		}
+		// First signal: cancel the context so deferred cleanups can run.
+		sig := <-sigs
+
+		slog.Warn("Interrupt detected; cancelling and unwinding "+
+			"(send another signal to force-exit if cleanup hangs)",
+			slog.String("kind", sig.String()))
+
+		cancel()
+
+		// Subsequent signals: force-exit. We restore default disposition for the
+		// signal first so even Go's runtime won't intercept; this makes the second
+		// Ctrl-C behave like a vanilla program's would.
+		sig = <-sigs
+
+		slog.Error("Second signal received; force-exiting "+
+			"(in-flight cleanup may not have completed; check libvirt for leaked guests)",
+			slog.String("kind", sig.String()))
+
+		signal.Stop(sigs)
+		os.Exit(forcedExitCode)
 	}()
 }
 

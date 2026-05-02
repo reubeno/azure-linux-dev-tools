@@ -931,15 +931,21 @@
         "type": {
           "type": "string",
           "enum": [
-            "pytest"
+            "pytest",
+            "tmt"
           ],
           "title": "Type",
-          "description": "Type of test framework (pytest)"
+          "description": "Type of test framework (pytest or tmt)"
         },
         "pytest": {
           "$ref": "#/$defs/PytestConfig",
           "title": "Pytest config",
           "description": "Pytest-specific configuration (required when type is pytest)"
+        },
+        "tmt": {
+          "$ref": "#/$defs/TmtConfig",
+          "title": "Tmt config",
+          "description": "tmt-specific configuration (required when type is tmt)"
         }
       },
       "additionalProperties": false,
@@ -961,6 +967,108 @@
       "required": [
         "name"
       ]
+    },
+    "TmtConfig": {
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/TmtGitSource",
+          "title": "Source",
+          "description": "Git source for the tmt content (e.g."
+        },
+        "plan": {
+          "type": "string",
+          "title": "Plan",
+          "description": "tmt plan name (e.g."
+        },
+        "pip-extras": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Pip extras",
+          "description": "Additional pip extras to install with tmt (provision-virtual is auto-added when how=virtual)"
+        },
+        "context": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object",
+          "title": "Context",
+          "description": "tmt context dimensions (e.g."
+        },
+        "run-extra-args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Run extra args",
+          "description": "Verbatim args inserted before 'tmt run' (cannot include --id, -c, --context)"
+        },
+        "plan-extra-args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Plan extra args",
+          "description": "Verbatim args inserted after 'plan -n \u003cplan\u003e'"
+        },
+        "provision-extra-args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Provision extra args",
+          "description": "Verbatim args inserted after 'provision -h \u003chow\u003e' (cannot include --image)"
+        },
+        "provision": {
+          "$ref": "#/$defs/TmtProvisionConfig",
+          "title": "Provision",
+          "description": "tmt provision step configuration"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "source",
+        "plan"
+      ]
+    },
+    "TmtGitSource": {
+      "properties": {
+        "git-url": {
+          "type": "string",
+          "title": "Git URL",
+          "description": "URL of the git repository"
+        },
+        "ref": {
+          "type": "string",
+          "title": "Ref",
+          "description": "Commit SHA to check out (40-char hex hash)"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "git-url",
+        "ref"
+      ]
+    },
+    "TmtProvisionConfig": {
+      "properties": {
+        "how": {
+          "type": "string",
+          "enum": [
+            "virtual"
+          ],
+          "title": "How",
+          "description": "tmt provision plugin (MVP supports only 'virtual')"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "ToolsConfig": {
       "properties": {

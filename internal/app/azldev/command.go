@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/charmbracelet/x/term"
@@ -121,6 +122,18 @@ func runFuncInternal(innerFunc CmdWithExtraArgsFuncType, requireConfig bool) cob
 			// display.
 			if errors.Is(err, ErrInvalidUsage) {
 				command.SilenceUsage = false
+			}
+
+			// Print whatever structured results we have, even on error, so that
+			// commands which gather output before failing (e.g., test runs that
+			// produced per-test results before a downstream step failed) still
+			// surface them in the user-selected format. Reporting itself is best
+			// effort — we don't override the original error if reporting fails.
+			if results != nil {
+				if reportErr := reportResults(env, results); reportErr != nil {
+					slog.Warn("Failed to report results alongside command error",
+						slog.String("err", reportErr.Error()))
+				}
 			}
 
 			return err

@@ -228,7 +228,7 @@ func TestRunPytestSuite_MissingPytestConfig(t *testing.T) {
 		ImagePath: "/images/test.raw",
 	}
 
-	err := image.RunPytestSuite(nil, suiteConfig, testImageConfig(), options)
+	_, err := image.RunPytestSuite(nil, suiteConfig, testImageConfig(), options)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing pytest configuration")
 }

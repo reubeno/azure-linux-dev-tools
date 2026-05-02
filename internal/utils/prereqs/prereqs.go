@@ -34,6 +34,10 @@ const (
 // ErrMissingExecutable is returned when a required executable cannot be found or acquired.
 var ErrMissingExecutable = errors.New("executable missing, no auto-resolution")
 
+// ErrMissingFile is returned when a required file cannot be found or acquired (typically a
+// development header or pkg-config file installed by a `*-devel` package).
+var ErrMissingFile = errors.New("file missing, no auto-resolution")
+
 // Checks that the executable identified by `programName` is available in the host system. If it
 // can't be found but `prereq` is provided, then will attempt to auto-install the prerequisite,
 // dependent on the policy configured in `ctx`. If `programName` isn't present and can't be
@@ -66,6 +70,53 @@ func RequireExecutable(ctx opctx.Ctx, programName string, prereq *PackagePrereq)
 	}
 
 	return nil
+}
+
+// RequireFile checks that the file at `filePath` is present on the host. If it is missing
+// and `prereq` is provided, attempts to auto-install the prerequisite (subject to ctx
+// policy). `displayName` is a human-readable label used in prompts and errors (e.g.,
+// "libvirt development headers"). Returns an error if the file is missing and cannot be
+// (or is not allowed to be) auto-installed.
+func RequireFile(ctx opctx.Ctx, displayName string, filePath string, prereq *PackagePrereq) error {
+	if filePresent(ctx, filePath) {
+		return nil
+	}
+
+	var autoInstall bool
+
+	if prereq != nil {
+		prompt := fmt.Sprintf(
+			"Required file '%s' for %s not found; would you like the providing package(s) to be installed for you?",
+			filePath, displayName)
+		autoInstall = ctx.ConfirmAutoResolution(prompt)
+	}
+
+	if !autoInstall {
+		return fmt.Errorf("%s (file %#q) required:\n%w", displayName, filePath, ErrMissingFile)
+	}
+
+	err := prereq.Install(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Try one last time.
+	if !filePresent(ctx, filePath) {
+		return fmt.Errorf(
+			"required file %#q for %s still not found after installing known prerequisites",
+			filePath, displayName)
+	}
+
+	return nil
+}
+
+// filePresent returns whether filePath exists on the context's filesystem. Errors during
+// the lookup are treated as "not present" to keep the API simple; callers that need to
+// distinguish are expected to call [fileutils.Exists] directly.
+func filePresent(ctx opctx.Ctx, filePath string) bool {
+	exists, err := fileutils.Exists(ctx.FS(), filePath)
+
+	return err == nil && exists
 }
 
 // Installs the prerequisite on the host system.

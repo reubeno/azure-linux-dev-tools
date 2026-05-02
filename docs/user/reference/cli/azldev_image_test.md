@@ -25,6 +25,14 @@ with the configured test paths and extra arguments. Use {image-path} in
 extra-args to insert the image path. Glob patterns (including **) in
 test-paths are expanded automatically.
 
+For tmt tests, azldev clones the configured source repo at the pinned ref,
+creates a per-suite Python venv, installs tmt with the appropriate provision
+plugin, optionally converts the image-under-test to qcow2, and invokes tmt
+against the configured plan with a managed --image override. Each invocation
+gets a fresh, uniquely-named run directory under the project work dir;
+azldev emits an azldev-results.json next to the run with structured per-test
+results.
+
 ```
 azldev image test IMAGE_NAME [flags]
 ```

@@ -35,13 +35,26 @@ const (
 )
 
 // RunPytestSuite runs a pytest-based test suite natively using a Python venv.
+//
+// Today the pytest runner does not extract per-test results — it returns a single
+// suite-level rollup row reflecting the overall pytest exit code. When per-test
+// extraction is added (e.g., via JUnit XML harvesting), this function will return one
+// row per test instead.
 func RunPytestSuite(
 	env *azldev.Env, suiteConfig *projectconfig.TestSuiteConfig,
 	imageConfig *projectconfig.ImageConfig, options *ImageTestOptions,
-) error {
+) ([]ImageTestResult, error) {
+	rollup := func(status string) []ImageTestResult {
+		return []ImageTestResult{{
+			Suite:  suiteConfig.Name,
+			Type:   string(projectconfig.TestTypePytest),
+			Status: status,
+		}}
+	}
+
 	pytestConfig := suiteConfig.Pytest
 	if pytestConfig == nil {
-		return fmt.Errorf("test suite %#q is missing pytest configuration", suiteConfig.Name)
+		return nil, fmt.Errorf("test suite %#q is missing pytest configuration", suiteConfig.Name)
 	}
 
 	slog.Info("Running pytest test suite",
@@ -54,23 +67,23 @@ func RunPytestSuite(
 	if pytestConfig.WorkingDir != "" {
 		workingDirExists, err := fileutils.DirExists(env.FS(), pytestConfig.WorkingDir)
 		if err != nil {
-			return fmt.Errorf("cannot access working directory %#q:\n%w", pytestConfig.WorkingDir, err)
+			return nil, fmt.Errorf("cannot access working directory %#q:\n%w", pytestConfig.WorkingDir, err)
 		}
 
 		if !workingDirExists {
-			return fmt.Errorf("working directory not found: %#q", pytestConfig.WorkingDir)
+			return nil, fmt.Errorf("working directory not found: %#q", pytestConfig.WorkingDir)
 		}
 	}
 
 	// Ensure python3 is available.
 	if err := prereqs.RequireExecutable(env, pythonProgram, nil); err != nil {
-		return fmt.Errorf("python3 is required to run pytest tests:\n%w", err)
+		return nil, fmt.Errorf("python3 is required to run pytest tests:\n%w", err)
 	}
 
 	// Set up or reuse the venv.
 	venvDir, err := ensurePytestVenv(env, suiteConfig.Name, pytestConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Build the pytest command: expand test paths, substitute placeholders in extra args.
@@ -93,14 +106,14 @@ func RunPytestSuite(
 
 	cmd, err := env.Command(pytestCmd)
 	if err != nil {
-		return fmt.Errorf("failed to create pytest command:\n%w", err)
+		return nil, fmt.Errorf("failed to create pytest command:\n%w", err)
 	}
 
 	if err := cmd.Run(env); err != nil {
-		return fmt.Errorf("pytest run failed:\n%w", err)
+		return rollup(TestStatusFail), fmt.Errorf("pytest run failed:\n%w", err)
 	}
 
-	return nil
+	return rollup(TestStatusPass), nil
 }
 
 // ensurePytestVenv creates or reuses a Python venv for the given test suite and installs

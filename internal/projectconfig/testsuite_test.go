@@ -203,6 +203,158 @@ func TestTestSuiteConfig_Validate(t *testing.T) {
 	})
 }
 
+const validSHA = "a6bcc6767229199f4f02b781d1d39df0835d894b"
+
+func tmtSuite(mods func(*projectconfig.TmtConfig)) *projectconfig.TestSuiteConfig {
+	cfg := &projectconfig.TmtConfig{
+		Source: projectconfig.TmtGitSource{
+			GitURL: "https://example.com/repo.git",
+			Ref:    validSHA,
+		},
+		Plan: "/plans/smoke",
+	}
+	if mods != nil {
+		mods(cfg)
+	}
+
+	return &projectconfig.TestSuiteConfig{
+		Name: "tmt-smoke",
+		Type: projectconfig.TestTypeTmt,
+		Tmt:  cfg,
+	}
+}
+
+func TestTmtConfig_Validate(t *testing.T) {
+	t.Run("minimal valid config passes", func(t *testing.T) {
+		s := tmtSuite(nil)
+		assert.NoError(t, s.Validate())
+	})
+
+	t.Run("with optional how=virtual passes", func(t *testing.T) {
+		s := tmtSuite(func(c *projectconfig.TmtConfig) {
+			c.Provision.How = projectconfig.TmtProvisionHowVirtual
+		})
+		assert.NoError(t, s.Validate())
+	})
+
+	t.Run("missing tmt subtable when type=tmt", func(t *testing.T) {
+		suite := &projectconfig.TestSuiteConfig{Name: "x", Type: projectconfig.TestTypeTmt}
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrMissingTestField)
+	})
+
+	t.Run("type=tmt rejects pytest subtable", func(t *testing.T) {
+		suite := tmtSuite(nil)
+		suite.Pytest = &projectconfig.PytestConfig{}
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrMismatchedTestSubtable)
+	})
+
+	t.Run("type=pytest rejects tmt subtable", func(t *testing.T) {
+		suite := &projectconfig.TestSuiteConfig{
+			Name:   "x",
+			Type:   projectconfig.TestTypePytest,
+			Pytest: &projectconfig.PytestConfig{},
+			Tmt:    &projectconfig.TmtConfig{},
+		}
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrMismatchedTestSubtable)
+	})
+
+	t.Run("missing source.git-url", func(t *testing.T) {
+		suite := tmtSuite(func(c *projectconfig.TmtConfig) { c.Source.GitURL = "" })
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrMissingTestField)
+	})
+
+	t.Run("missing source.ref", func(t *testing.T) {
+		suite := tmtSuite(func(c *projectconfig.TmtConfig) { c.Source.Ref = "" })
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrMissingTestField)
+	})
+
+	t.Run("non-40-char ref rejected", func(t *testing.T) {
+		suite := tmtSuite(func(c *projectconfig.TmtConfig) { c.Source.Ref = "abc1234" })
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrInvalidGitRef)
+	})
+
+	t.Run("non-hex ref rejected", func(t *testing.T) {
+		suite := tmtSuite(func(c *projectconfig.TmtConfig) {
+			c.Source.Ref = "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+		})
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrInvalidGitRef)
+	})
+
+	t.Run("missing plan", func(t *testing.T) {
+		suite := tmtSuite(func(c *projectconfig.TmtConfig) { c.Plan = "" })
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrMissingTestField)
+	})
+
+	t.Run("unsupported provision how", func(t *testing.T) {
+		suite := tmtSuite(func(c *projectconfig.TmtConfig) {
+			c.Provision.How = "container"
+		})
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrUnsupportedTmtProvision)
+	})
+
+	t.Run("forbidden flag in run-extra-args", func(t *testing.T) {
+		for _, bad := range []string{"--id", "-i", "-c", "--context", "--id=foo", "-c=k=v"} {
+			t.Run(bad, func(t *testing.T) {
+				suite := tmtSuite(func(c *projectconfig.TmtConfig) {
+					c.RunExtraArgs = []string{bad}
+				})
+				err := suite.Validate()
+				require.Error(t, err)
+				assert.ErrorIs(t, err, projectconfig.ErrForbiddenExtraArg)
+			})
+		}
+	})
+
+	t.Run("forbidden --image in provision-extra-args", func(t *testing.T) {
+		suite := tmtSuite(func(c *projectconfig.TmtConfig) {
+			c.ProvisionExtraArgs = []string{"--image=/somewhere/else.qcow2"}
+		})
+		err := suite.Validate()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, projectconfig.ErrForbiddenExtraArg)
+	})
+
+	t.Run("plan-extra-args is unrestricted", func(t *testing.T) {
+		suite := tmtSuite(func(c *projectconfig.TmtConfig) {
+			c.PlanExtraArgs = []string{"--filter", "tag:smoke"}
+		})
+		assert.NoError(t, suite.Validate())
+	})
+}
+
+func TestTestSuiteConfig_WithAbsolutePaths_TmtDeepCopies(t *testing.T) {
+	src := tmtSuite(func(c *projectconfig.TmtConfig) {
+		c.PipExtras = []string{"x"}
+		c.RunExtraArgs = []string{"-vvv"}
+		c.Context = map[string][]string{"distro": {"a", "b"}}
+	})
+	got := src.WithAbsolutePaths("/anywhere")
+	require.NotNil(t, got.Tmt)
+	// Mutating the copy must not bleed back.
+	got.Tmt.PipExtras[0] = "MUTATED"
+	got.Tmt.Context["distro"][0] = "MUTATED"
+	assert.Equal(t, "x", src.Tmt.PipExtras[0])
+	assert.Equal(t, "a", src.Tmt.Context["distro"][0])
+}
+
 func TestPytestConfig_EffectiveInstallMode(t *testing.T) {
 	t.Run("default is none", func(t *testing.T) {
 		cfg := &projectconfig.PytestConfig{}
