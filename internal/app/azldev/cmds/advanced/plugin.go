@@ -42,6 +42,7 @@ type PluginInfo struct {
 	Tools         int
 	HasManifest   bool
 	ManifestTitle string
+	Providers     int
 }
 
 // PluginDetail is the full per-plugin record returned by
@@ -49,11 +50,12 @@ type PluginInfo struct {
 // (when present) the parsed manifest fields, so users can confirm what
 // azldev sees about a plugin without having to inspect MCP traffic.
 type PluginDetail struct {
-	Name     string
-	Version  string
-	Path     string
-	Manifest *plugins.Manifest
-	Tools    []PluginToolDetail
+	Name      string
+	Version   string
+	Path      string
+	Manifest  *plugins.Manifest
+	Tools     []PluginToolDetail
+	Providers []PluginProviderDetail
 }
 
 // PluginToolDetail is one row of [PluginDetail.Tools]; it surfaces the tool
@@ -63,6 +65,15 @@ type PluginToolDetail struct {
 	Name        string
 	Description string
 	Destination string
+}
+
+// PluginProviderDetail summarizes one provider registration. It mirrors
+// [plugins.ProviderRef] for output-format compatibility but lives here so
+// it can vary in formatting independently from the wire shape.
+type PluginProviderDetail struct {
+	Kind string
+	Name string
+	Tool string
 }
 
 // newPluginListCmd returns 'azldev advanced plugin list', which produces
@@ -118,6 +129,7 @@ func summarizePlugin(plugin *plugins.Plugin) PluginInfo {
 	if manifest := plugin.Manifest(); manifest != nil {
 		info.HasManifest = true
 		info.ManifestTitle = manifest.Title
+		info.Providers = len(manifest.Providers)
 	}
 
 	return info
@@ -137,12 +149,26 @@ func detailPlugin(plugin *plugins.Plugin) PluginDetail {
 		})
 	}
 
+	var providers []PluginProviderDetail
+
+	if manifest := plugin.Manifest(); manifest != nil {
+		providers = make([]PluginProviderDetail, 0, len(manifest.Providers))
+		for _, ref := range manifest.Providers {
+			providers = append(providers, PluginProviderDetail{
+				Kind: ref.Kind,
+				Name: ref.Name,
+				Tool: ref.Tool,
+			})
+		}
+	}
+
 	return PluginDetail{
-		Name:     plugin.Name(),
-		Version:  plugin.Version(),
-		Path:     plugin.Path(),
-		Manifest: plugin.Manifest(),
-		Tools:    tools,
+		Name:      plugin.Name(),
+		Version:   plugin.Version(),
+		Path:      plugin.Path(),
+		Manifest:  plugin.Manifest(),
+		Tools:     tools,
+		Providers: providers,
 	}
 }
 

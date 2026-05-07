@@ -103,6 +103,10 @@ type Env struct {
 	// Populated after the plugin loader has spawned and registered them
 	// (see [App.loadAndRegisterPlugins]); nil when no plugins were loaded.
 	loadedPlugins []*plugins.Plugin
+
+	// pluginRegistry indexes plugin-declared providers by (kind, name).
+	// Populated alongside [loadedPlugins]; nil when no plugins were loaded.
+	pluginRegistry *plugins.Registry
 }
 
 // Constructs a new [Env] using specified options.
@@ -454,6 +458,21 @@ func (env *Env) LoadedPlugins() []*plugins.Plugin {
 // after plugin loading completes.
 func (env *Env) SetLoadedPlugins(loaded []*plugins.Plugin) {
 	env.loadedPlugins = loaded
+}
+
+// PluginRegistry returns the (kind, name) -> Provider registry built from
+// every loaded plugin's manifest. Returns nil when no plugins were
+// loaded. Consumers that look up named providers (e.g., 'component build
+// --builder=cloud') should use this rather than walking [LoadedPlugins].
+func (env *Env) PluginRegistry() *plugins.Registry {
+	return env.pluginRegistry
+}
+
+// SetPluginRegistry records the registry built by the App during plugin
+// load. Called by the App; consumers should treat [PluginRegistry] as
+// read-only.
+func (env *Env) SetPluginRegistry(registry *plugins.Registry) {
+	env.pluginRegistry = registry
 }
 
 // Resolves the environment's default "distro" -- i.e., the distro that is being built in and against.

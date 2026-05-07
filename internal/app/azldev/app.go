@@ -690,6 +690,16 @@ func (a *App) loadAndRegisterPlugins(ctx context.Context, env *Env) error {
 		return fmt.Errorf("failed to load plugins:\n%w", err)
 	}
 
+	// Build the provider registry before registering Cobra commands so a
+	// manifest-level error fails fast — plugins should not be partially
+	// observable to the rest of the app on this kind of failure.
+	registry, err := plugins.BuildRegistry(loaded)
+	if err != nil {
+		_ = plugins.CloseAll(loaded)
+
+		return fmt.Errorf("failed to build plugin provider registry:\n%w", err)
+	}
+
 	// tool RunE handlers obtain ctx from cmd.Context() at invocation time
 	if err := plugins.Register(&a.cmd, env, loaded); err != nil { //nolint:contextcheck
 		// Tear down what we loaded; we never made it to handing them to
@@ -701,6 +711,7 @@ func (a *App) loadAndRegisterPlugins(ctx context.Context, env *Env) error {
 
 	a.plugins = loaded
 	env.SetLoadedPlugins(loaded)
+	env.SetPluginRegistry(registry)
 
 	return nil
 }

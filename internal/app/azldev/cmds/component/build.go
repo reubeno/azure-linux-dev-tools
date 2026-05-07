@@ -39,6 +39,13 @@ type ComponentBuildOptions struct {
 	// MockConfigOpts is an optional set of key-value config options that will be passed through
 	// to mock as --config-opts key=value arguments.
 	MockConfigOpts map[string]string
+
+	// Builder selects which builder backend to use. Empty (or 'local')
+	// keeps the built-in mock-based pipeline; any other value names a
+	// plugin-registered builder (kind="builder") and delegates the build
+	// entirely to that plugin. See [PluginBuilderResult] for the
+	// delegation contract.
+	Builder string
 }
 
 // RPMResult encapsulates a single binary RPM produced by a component build,
@@ -146,6 +153,9 @@ builds can consume.`,
 		"Path to local repository to include during build and publish built RPMs to")
 	cmd.Flags().StringToStringVar(&options.MockConfigOpts, "mock-config-opt", nil,
 		"Pass a configuration option through to mock (key=value, can be specified multiple times)")
+	cmd.Flags().StringVar(&options.Builder, "builder", "",
+		"Builder backend to use ('local' or empty for the built-in mock pipeline; "+
+			"any other value names a plugin-registered builder)")
 
 	// Mark flags as mutually exclusive.
 	cmd.MarkFlagsMutuallyExclusive("srpm-only", "local-repo-with-publish")
@@ -153,8 +163,28 @@ builds can consume.`,
 	return cmd
 }
 
+// BuilderProviderKind is the [plugins.ProviderRef] 'kind' that names a
+// component-builder plugin backend selected via 'component build
+// --builder=<name>'. The kind name is part of the plugin contract; do not
+// rename without bumping the manifest protocol-version.
+const BuilderProviderKind = "builder"
+
+// LocalBuilderName is the implicit-default value of '--builder'; it
+// selects the built-in mock-based build pipeline.
+const LocalBuilderName = "local"
+
+// PluginBuilderResult is the structured return shape produced when
+// 'component build --builder=<name>' delegates to a plugin. The Output
+// field is whatever textual result the plugin's tool returned; callers
+// typically just print it via the standard report formatter.
+type PluginBuilderResult struct {
+	Builder    string   `json:"builder"    table:"Builder"`
+	Components []string `json:"components" table:"Components"`
+	Output     string   `json:"output"     table:"Output"`
+}
+
 func SelectAndBuildComponents(env *azldev.Env, options *ComponentBuildOptions,
-) ([]ComponentBuildResults, error) {
+) (interface{}, error) {
 	// Validate options before doing any work.
 	if err := validateBuildOptions(env, options); err != nil {
 		return nil, err
@@ -176,7 +206,94 @@ func SelectAndBuildComponents(env *azldev.Env, options *ComponentBuildOptions,
 		)
 	}
 
+	if usePluginBuilder(options) {
+		return buildViaPluginBuilder(env, comps, options)
+	}
+
 	return BuildComponents(env, comps, options)
+}
+
+// usePluginBuilder reports whether '--builder' selects a plugin backend
+// (anything other than the default 'local' / empty string).
+func usePluginBuilder(options *ComponentBuildOptions) bool {
+	return options.Builder != "" && options.Builder != LocalBuilderName
+}
+
+// buildViaPluginBuilder resolves the requested builder via the plugin
+// provider registry and delegates the build entirely to it. The plugin's
+// tool is responsible for everything: source acquisition, build
+// execution, artifact placement. azldev only translates the request and
+// renders the response.
+//
+// Args sent to the plugin (kind="builder", protocol-version=1):
+//
+//	{
+//	  "components": [<component-name>, ...],
+//	  "options": {
+//	    "no-check":          bool,
+//	    "srpm-only":         bool,
+//	    "with-git":          bool,
+//	    "continue-on-error": bool,
+//	    "local-repo-paths":           [<absolute path>, ...],
+//	    "local-repo-with-publish":     <absolute path>,
+//	    "mock-config-opts":  { <key>: <value>, ... }
+//	  },
+//	  "paths": {
+//	    "project": <abs path>,
+//	    "work":    <abs path>,
+//	    "output":  <abs path>,
+//	    "logs":    <abs path>
+//	  }
+//	}
+func buildViaPluginBuilder(
+	env *azldev.Env, comps *components.ComponentSet, options *ComponentBuildOptions,
+) (*PluginBuilderResult, error) {
+	registry := env.PluginRegistry()
+	if registry == nil {
+		return nil, fmt.Errorf(
+			"--builder=%q requires a plugin to be loaded; pass '--plugin <path>' to register one",
+			options.Builder)
+	}
+
+	provider, err := registry.Lookup(BuilderProviderKind, options.Builder)
+	if err != nil {
+		return nil, fmt.Errorf("--builder=%q: %w", options.Builder, err)
+	}
+
+	componentNames := make([]string, 0, comps.Len())
+	for _, comp := range comps.Components() {
+		componentNames = append(componentNames, comp.GetName())
+	}
+
+	args := map[string]any{
+		"components": componentNames,
+		"options": map[string]any{
+			"no-check":                options.NoCheck,
+			"srpm-only":               options.SourcePackageOnly,
+			"with-git":                options.WithGitRepo,
+			"continue-on-error":       options.ContinueOnError,
+			"local-repo-paths":        options.LocalRepoPaths,
+			"local-repo-with-publish": options.LocalRepoWithPublishPath,
+			"mock-config-opts":        options.MockConfigOpts,
+		},
+		"paths": map[string]any{
+			"project": env.ProjectDir(),
+			"work":    env.WorkDir(),
+			"output":  env.OutputDir(),
+			"logs":    env.LogsDir(),
+		},
+	}
+
+	output, callErr := provider.Call(env.Context(), args)
+	if callErr != nil {
+		return nil, fmt.Errorf("plugin builder %q failed:\n%w", options.Builder, callErr)
+	}
+
+	return &PluginBuilderResult{
+		Builder:    options.Builder,
+		Components: componentNames,
+		Output:     output,
+	}, nil
 }
 
 func BuildComponents(

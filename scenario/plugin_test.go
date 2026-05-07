@@ -6,6 +6,8 @@
 package scenario_tests
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -250,11 +252,13 @@ func TestPlugin_AdvancedPluginList(t *testing.T) {
 	require.Zero(t, results.ExitCode, "stderr=%s", results.Stderr)
 
 	assert.Contains(t, results.Stdout, `"Name": "hello"`)
-	assert.Contains(t, results.Stdout, `"Tools": 2`,
-		"reference plugin advertises two tools (greet + cloud-greet)")
+	assert.Contains(t, results.Stdout, `"Tools": 3`,
+		"reference plugin advertises three tools (greet + cloud-greet + cloud-build)")
 	assert.Contains(t, results.Stdout, `"HasManifest": true`,
 		"reference plugin publishes a manifest")
 	assert.Contains(t, results.Stdout, `"ManifestTitle": "Hello plugin (reference)"`)
+	assert.Contains(t, results.Stdout, `"Providers": 1`,
+		"reference plugin registers one provider (cloud builder)")
 }
 
 // TestPlugin_AdvancedPluginInfo exercises the 'azldev advanced plugin
@@ -280,4 +284,101 @@ func TestPlugin_AdvancedPluginInfo(t *testing.T) {
 		"info should report namespace destination for greet")
 	assert.Contains(t, results.Stdout, `"protocol-version": 1`,
 		"info should embed the parsed manifest")
+	assert.Contains(t, results.Stdout, `"Kind": "builder"`,
+		"info should list provider registrations")
+	assert.Contains(t, results.Stdout, `"Name": "cloud"`,
+		"info should list provider registrations")
+}
+
+// writeBuilderTestProject populates dir with a minimal project tree
+// that's just sufficient for 'component build' to reach the builder
+// dispatch logic without erroring on missing distro/component metadata.
+// The test distro is opaque to the cloud builder — the plugin only
+// echoes back what it was asked to build.
+func writeBuilderTestProject(t *testing.T, dir string) {
+	t.Helper()
+
+	const azldevToml = `
+[project]
+description = "phase 3 builder test"
+log-dir = "build/logs"
+work-dir = "build/work"
+output-dir = "out"
+[project.default-distro]
+name = "test"
+version = "1.0"
+
+[distros.test]
+description = "test distro"
+default-version = "1.0"
+[distros.test.versions.'1.0']
+
+[component-groups.default]
+specs = ["specs/*.spec"]
+excluded-paths = ["build/**", "out/**"]
+`
+
+	const trivialSpec = `Name: a
+Version: 1
+Release: 1
+Summary: trivial spec for builder test
+License: MIT
+%description
+trivial
+`
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "azldev.toml"),
+		[]byte(azldevToml), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "specs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "specs", "a.spec"),
+		[]byte(trivialSpec), 0o600))
+}
+
+// TestPlugin_BuilderProviderInvocation exercises the full
+// '--builder=<name>' delegation path: plugin manifest declares a
+// 'cloud' builder; azldev's component build reaches it via the registry
+// and surfaces its textual result.
+func TestPlugin_BuilderProviderInvocation(t *testing.T) {
+	t.Parallel()
+
+	pluginBin := pluginTestSetup(t)
+
+	projectDir := t.TempDir()
+	writeBuilderTestProject(t, projectDir)
+
+	t.Run("happy path", func(t *testing.T) {
+		t.Parallel()
+
+		results, err := cmdtest.NewScenarioTest(
+			"--plugin", pluginBin,
+			"--no-default-config",
+			"-C", projectDir,
+			"-O", "json",
+			"component", "build", "--builder=cloud", "-p", "a",
+			"--color=never",
+		).Locally().Run(t)
+		require.NoError(t, err)
+		require.Zero(t, results.ExitCode, "stderr=%s", results.Stderr)
+		assert.Contains(t, results.Stdout, `"builder": "cloud"`)
+		assert.Contains(t, results.Stdout, `"output": "cloud builder would build: a"`)
+	})
+
+	t.Run("unknown builder fails fast", func(t *testing.T) {
+		t.Parallel()
+
+		results, err := cmdtest.NewScenarioTest(
+			"--plugin", pluginBin,
+			"--no-default-config",
+			"-C", projectDir,
+			"component", "build", "--builder=ghost", "-p", "a",
+			"--color=never",
+		).Locally().Run(t)
+		require.NoError(t, err)
+		require.NotZero(t, results.ExitCode,
+			"--builder pointing at an unregistered name must fail")
+		assert.Contains(t, results.Stderr, "provider not found",
+			"error should explain why the builder was rejected")
+		assert.Contains(t, results.Stderr, "available builder providers: cloud",
+			"error should hint which builders are available")
+	})
 }

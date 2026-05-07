@@ -43,9 +43,9 @@ var ErrManifestMalformed = errors.New("malformed plugin manifest")
 // Manifest is the parsed view of the azldev://manifest MCP resource. It
 // captures plugin-level metadata that is independent of any specific tool.
 //
-// Only the fields relevant to Phase 2 are populated at this time. Later
-// phases (provider registrations, settings schema, …) will extend this
-// struct without breaking existing consumers.
+// Only the fields relevant to Phases 2–3 are populated at this time. Later
+// phases (settings schema, …) will extend this struct without breaking
+// existing consumers.
 //
 // JSON tags use kebab-case to match the on-the-wire manifest contract
 // documented in 'docs/user/explanation/plugins.md'.
@@ -61,6 +61,12 @@ type Manifest struct {
 	// Description overrides the long-form plugin description shown by
 	// 'azldev advanced plugin info'. Optional.
 	Description string `json:"description,omitempty"`
+
+	// Providers is the list of named provider implementations the plugin
+	// registers. Each entry binds a contract identifier (kind+name) to a
+	// tool the plugin advertises. See [ProviderRef] for field details and
+	// [Registry] for how azldev consumes them.
+	Providers []ProviderRef `json:"providers,omitempty"`
 }
 
 // ToolGraftHints is the parsed view of a tool's '_meta.azldev' object. It

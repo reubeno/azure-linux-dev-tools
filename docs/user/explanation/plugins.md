@@ -10,9 +10,10 @@ azldev *and* by AI coding agents, with no change to the plugin.
 > **Status:** preview. The current implementation supports loading
 > plugins from the command line, registering their tools as Cobra
 > subcommands, optionally grafting tools into the existing command
-> hierarchy via per-tool metadata, and a small admin CLI for
-> introspection. Future phases will add user-level config registration,
-> project-config injection, and named provider/backend extensions.
+> hierarchy via per-tool metadata, named provider/backend extensions
+> (starting with `--builder=<name>` on `component build`), and a small
+> admin CLI for introspection. Future phases will add user-level config
+> registration and project-config injection.
 
 ## Loading a plugin
 
@@ -190,6 +191,75 @@ help.
 azldev --plugin ./azldev-plugin-hello -O json advanced plugin info hello
 ```
 
+## Provider plugins (`--builder=<name>`)
+
+Plugins can register **named providers** that built-in azldev commands
+delegate to. The first such hook is `azldev component build
+--builder=<name>`: when set to anything other than the implicit `local`
+default, azldev looks up the named provider in the plugin registry and
+delegates the entire build flow to that plugin tool.
+
+A provider is declared in the manifest's `providers` array:
+
+```jsonc
+{
+  "protocol-version": 1,
+  "providers": [
+    { "kind": "builder", "name": "cloud", "tool": "cloud-build" }
+  ]
+}
+```
+
+- `kind` names the contract this provider implements. The set of valid
+  kinds is owned by azldev; the only one shipping today is `builder`.
+- `name` is the user-facing handle (`--builder=cloud` selects this one).
+- `tool` is the name of one of the plugin's MCP tools that implements
+  the contract.
+
+If two plugins register the same `(kind, name)`, azldev rejects the load
+with a clear error (similar to plugin-name collisions).
+
+### `builder` contract
+
+When `azldev component build --builder=cloud foo` runs, the plugin tool
+receives:
+
+```jsonc
+{
+  "components": ["foo"],
+  "options": {
+    "no-check":          false,
+    "srpm-only":         false,
+    "with-git":          false,
+    "continue-on-error": false,
+    "local-repo-paths":           [],
+    "local-repo-with-publish":     "",
+    "mock-config-opts":  null
+  },
+  "paths": {
+    "project": "/abs/path/to/project",
+    "work":    "/abs/path/to/work",
+    "output":  "/abs/path/to/out",
+    "logs":    "/abs/path/to/logs"
+  }
+}
+```
+
+The plugin owns the entire build pipeline (source acquisition, build
+execution, artifact placement). azldev only translates the request and
+renders the textual response. Future protocol versions may extend the
+contract; for now use `protocol-version: 1`.
+
+### Inspecting providers
+
+`azldev advanced plugin info <name>` lists all provider registrations
+alongside the tool catalog and manifest. Use the JSON output for
+scripting:
+
+```sh
+azldev --plugin ./azldev-plugin-foo -O json advanced plugin info foo
+```
+
 ## Out of scope (still)
 
 The current implementation deliberately omits:
@@ -200,13 +270,12 @@ The current implementation deliberately omits:
   they run with whatever args/env they spawn under.
 - **Project-config injection.** Plugins cannot yet read the resolved
   project config.
-- **Provider/backend registration.** Built-in commands (e.g.,
-  `azldev component build`) cannot yet route to plugin tools via flags
-  like `--builder=<name>`.
 - **Caching of tool catalogs.** Every `azldev` invocation re-spawns each
   plugin to discover its tools.
 - **Trust and integrity controls.** No `sha256` pin, no `trust =
   user/system` model. Trust is the OS file-permission model alone.
+- **Provider kinds beyond `builder`.** `source-provider`, `image-step`,
+  etc. are on the roadmap but not yet wired.
 
 Each of these is on the roadmap; see the design notes in the project's
 plan documents for sequencing.
