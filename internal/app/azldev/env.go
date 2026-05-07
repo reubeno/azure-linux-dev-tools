@@ -428,6 +428,14 @@ func (env *Env) SetReportFile(reportFile io.Writer) {
 	env.reportFile = reportFile
 }
 
+// OutputWriter returns the writer used for command output. Implements
+// the plugin loader's host contract (see [core/plugins.Host]) so that
+// plugin-tool textual results route through the same channel as built-in
+// command results.
+func (env *Env) OutputWriter() io.Writer {
+	return env.reportFile
+}
+
 // Resolves the environment's default "distro" -- i.e., the distro that is being built in and against.
 // On success, returns back the definition of the distro as well as the definition of the specific
 // version of the distro.

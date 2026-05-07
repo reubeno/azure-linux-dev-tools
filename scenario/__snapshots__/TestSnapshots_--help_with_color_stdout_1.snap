@@ -32,6 +32,7 @@ Meta commands:
       [1;36m--no-default-config[0m         disable default configuration
   [1;36m-O,[0m [1;36m--output-format[0m [3;38;2;68;68;68mfmt[0m         output format {csv, json, markdown, table} (default table)
       [1;36m--permissive-config[0m         do not fail on unknown fields in TOML config files
+      [1;36m--plugin[0m [3;38;2;68;68;68mstringArray[0m        path to a plugin executable to load (may be repeated)
   [1;36m-C,[0m [1;36m--project[0m [3;38;2;68;68;68mstring[0m            path to Azure Linux project
   [1;36m-q,[0m [1;36m--quiet[0m                     only enable minimal output
   [1;36m-v,[0m [1;36m--verbose[0m                   enable verbose output

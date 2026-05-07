@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
+	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/plugins"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
@@ -50,6 +51,7 @@ type App struct {
 	disableDefaultConfig    bool
 	permissiveConfigParsing bool
 	configFiles             []string
+	pluginPaths             []string
 	colorMode               ColorMode
 
 	// Root command for the CLI.
@@ -61,6 +63,10 @@ type App struct {
 
 	// Registered callbacks to be invoked after configuration has been loaded.
 	postInitCallbacks []PostInitCallbackFunc
+
+	// Loaded plugin handles, owned for the lifetime of the App so subprocesses
+	// can be torn down deterministically on shutdown.
+	plugins []*plugins.Plugin
 }
 
 // appDryRunnable is an implementation of [opctx.DryRunnable] that is used to
@@ -174,6 +180,8 @@ func (app *App) registerGlobalFlags() {
 		"path to Azure Linux project")
 	app.cmd.PersistentFlags().StringArrayVar(&app.configFiles, "config-file", nil,
 		"additional TOML config file(s) to merge (may be repeated)")
+	app.cmd.PersistentFlags().StringArrayVar(&app.pluginPaths, "plugin", nil,
+		"path to a plugin executable to load (may be repeated)")
 	app.cmd.PersistentFlags().BoolVarP(&app.dryRun, "dry-run", "n", false, "dry run only (do not take action)")
 	app.cmd.PersistentFlags().IntVar(&app.networkRetries, "network-retries", retry.DefaultMaxAttempts,
 		"maximum number of attempts for network operations (minimum 1)")
@@ -344,6 +352,18 @@ func (a *App) Execute(args []string) int {
 	}
 
 	//
+	// Load any plugins requested via '--plugin' and register their tools as
+	// Cobra subcommands. Plugin processes are kept alive until just before
+	// we return so that the dispatched command can invoke their tools.
+	//
+	if err = a.loadAndRegisterPlugins(ctx, env); err != nil {
+		slog.Error("Error loading plugins.", "err", err)
+
+		return 1
+	}
+	defer a.closePlugins()
+
+	//
 	// Remove any intermediate commands that didn't get children.
 	//
 	a.removeEmptyCommands()
@@ -461,6 +481,8 @@ func setEventListener(stdioLogger *slog.Logger, quiet bool, envOptions *EnvOptio
 // Hand-parses a few critical configuration flags from the command line -- just enough to
 // find the project and load configuration so we can properly use cobra facilities to
 // parse the full command line.
+//
+//nolint:cyclop // shallow switch dispatch; complexity grows with the flag set, not the algorithm.
 func (a *App) handParseConfigFlags(args []string) {
 	for index := 0; index < len(args); index++ {
 		switch arg := args[index]; args[index] {
@@ -486,6 +508,11 @@ func (a *App) handParseConfigFlags(args []string) {
 			if index < len(args) {
 				a.configFiles = append(a.configFiles, args[index])
 			}
+		case "--plugin":
+			index++
+			if index < len(args) {
+				a.pluginPaths = append(a.pluginPaths, args[index])
+			}
 		case "-n", "--dry-run":
 			a.dryRun = true
 		case "--color":
@@ -510,6 +537,8 @@ func (a *App) handParsePrefixedFlags(arg string) {
 		_ = a.colorMode.Set(strings.TrimPrefix(arg, "--color="))
 	case strings.HasPrefix(arg, "--config-file="):
 		a.configFiles = append(a.configFiles, strings.TrimPrefix(arg, "--config-file="))
+	case strings.HasPrefix(arg, "--plugin="):
+		a.pluginPaths = append(a.pluginPaths, strings.TrimPrefix(arg, "--plugin="))
 	}
 }
 
@@ -638,6 +667,55 @@ func (a *App) callPostInitCallbacks(env *Env) error {
 	}
 
 	return nil
+}
+
+// loadAndRegisterPlugins spawns each plugin binary requested via '--plugin'
+// (in order), registers their advertised tools as Cobra subcommands, and
+// retains the live handles on the App for shutdown via [App.closePlugins].
+//
+// On any failure, all already-spawned plugins are torn down before the
+// error is returned, so no subprocesses leak. A no-op when no plugin paths
+// were given.
+func (a *App) loadAndRegisterPlugins(ctx context.Context, env *Env) error {
+	if len(a.pluginPaths) == 0 {
+		return nil
+	}
+
+	loaded, err := plugins.LoadAll(ctx, a.pluginPaths)
+	if err != nil {
+		env.AddFixSuggestion(
+			"Verify the plugin path is correct, the binary is executable, " +
+				"and that it speaks MCP over stdio.")
+
+		return fmt.Errorf("failed to load plugins:\n%w", err)
+	}
+
+	// tool RunE handlers obtain ctx from cmd.Context() at invocation time
+	if err := plugins.Register(&a.cmd, env, loaded); err != nil { //nolint:contextcheck
+		// Tear down what we loaded; we never made it to handing them to
+		// dispatch.
+		_ = plugins.CloseAll(loaded)
+
+		return fmt.Errorf("failed to register plugin commands:\n%w", err)
+	}
+
+	a.plugins = loaded
+
+	return nil
+}
+
+// closePlugins shuts down every plugin subprocess loaded by
+// [App.loadAndRegisterPlugins]. Safe to call when no plugins were loaded.
+func (a *App) closePlugins() {
+	if len(a.plugins) == 0 {
+		return
+	}
+
+	if err := plugins.CloseAll(a.plugins); err != nil {
+		slog.Warn("Error closing plugins.", "err", err)
+	}
+
+	a.plugins = nil
 }
 
 // Removes any intermediate commands that don't have children.

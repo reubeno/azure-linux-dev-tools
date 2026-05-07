@@ -54,6 +54,28 @@ func FindTestBinary() (string, error) {
 	return resolvedTestBinaryPath, nil
 }
 
+// FindAuxBinary locates an auxiliary binary (any executable produced by
+// 'mage build' alongside the main azldev binary) by name. Used by scenario
+// tests that exercise integrations such as plugins, where azldev needs to
+// be pointed at a sibling binary on disk.
+func FindAuxBinary(name string) (string, error) {
+	moduleRootPath, err := findModuleRoot()
+	if err != nil {
+		return "", fmt.Errorf("couldn't find go module root: %w", err)
+	}
+
+	binPath, err := filepath.Abs(filepath.Join(moduleRootPath, "out", "bin", name))
+	if err != nil {
+		return "", fmt.Errorf("failed to compute absolute path for aux binary %#q: %w", name, err)
+	}
+
+	if _, err := os.Stat(binPath); err != nil {
+		return "", fmt.Errorf("aux binary %#q not found at %#q (run 'mage build'?): %w", name, binPath, err)
+	}
+
+	return binPath, nil
+}
+
 // FindTestDockerDirectory finds the directory containing the collateral files for creating the testing container.
 func FindTestDockerDirectory() (string, error) {
 	moduleRootPath, err := findModuleRoot()

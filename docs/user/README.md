@@ -10,6 +10,7 @@
 ## Explanation
 
 - [Configuration System](./explanation/config-system.md) — how config files are loaded, merged, and how inheritance works
+- [Plugins (preview)](./explanation/plugins.md) — extending azldev with out-of-process MCP plugins
 
 ## Reference
 

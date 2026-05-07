@@ -51,6 +51,7 @@ azldev image build [image-name] [flags]
       --no-default-config         disable default configuration
   -O, --output-format fmt         output format {csv, json, markdown, table} (default table)
       --permissive-config         do not fail on unknown fields in TOML config files
+      --plugin stringArray        path to a plugin executable to load (may be repeated)
   -C, --project string            path to Azure Linux project
   -q, --quiet                     only enable minimal output
   -v, --verbose                   enable verbose output
