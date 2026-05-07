@@ -181,3 +181,103 @@ func TestPlugin_BadPathFailsFast(t *testing.T) {
 		strings.Contains(results.Stderr, "spawn") || strings.Contains(results.Stderr, "plugin"),
 		"error output should mention plugin or spawn failure; got: %s", results.Stderr)
 }
+
+// TestPlugin_GraftedToolUnderComponent verifies that the reference
+// plugin's 'cloud-greet' tool — which sets '_meta.azldev.command-path' to
+// ["component", "cloud-greet"] — appears as a child of the built-in
+// 'component' command rather than under the 'plugin <name>' fallback
+// namespace, and is invokable at its grafted path.
+func TestPlugin_GraftedToolUnderComponent(t *testing.T) {
+	t.Parallel()
+
+	pluginBin := pluginTestSetup(t)
+
+	t.Run("appears in component --help", func(t *testing.T) {
+		t.Parallel()
+
+		results, err := cmdtest.NewScenarioTest(
+			"--plugin", pluginBin, "component", "--help", "--color=never").
+			Locally().Run(t)
+		require.NoError(t, err)
+		require.Zero(t, results.ExitCode, "stderr=%s", results.Stderr)
+		assert.Contains(t, results.Stdout, "cloud-greet",
+			"grafted tool should be listed under 'component'")
+	})
+
+	t.Run("invokable at grafted path", func(t *testing.T) {
+		t.Parallel()
+
+		results, err := cmdtest.NewScenarioTest(
+			"--plugin", pluginBin,
+			"component", "cloud-greet",
+			"--name=alice", "--salutation=howdy",
+			"--color=never",
+		).Locally().Run(t)
+		require.NoError(t, err)
+		require.Zero(t, results.ExitCode, "stderr=%s", results.Stderr)
+		assert.Equal(t, "howdy, alice!\n", results.Stdout,
+			"grafted tool must invoke through the same MCP roundtrip as the namespace fallback")
+	})
+
+	t.Run("not duplicated in fallback namespace", func(t *testing.T) {
+		t.Parallel()
+
+		results, err := cmdtest.NewScenarioTest(
+			"--plugin", pluginBin, "plugin", "hello", "--help", "--color=never").
+			Locally().Run(t)
+		require.NoError(t, err)
+		require.Zero(t, results.ExitCode, "stderr=%s", results.Stderr)
+		assert.NotContains(t, results.Stdout, "cloud-greet",
+			"successfully-grafted tool must not also appear in the fallback namespace")
+	})
+}
+
+// TestPlugin_AdvancedPluginList exercises the 'azldev advanced plugin
+// list' admin command. We use JSON output to avoid coupling the test to
+// the table layout.
+func TestPlugin_AdvancedPluginList(t *testing.T) {
+	t.Parallel()
+
+	pluginBin := pluginTestSetup(t)
+
+	results, err := cmdtest.NewScenarioTest(
+		"--plugin", pluginBin,
+		"-O", "json",
+		"advanced", "plugin", "list",
+		"--color=never",
+	).Locally().Run(t)
+	require.NoError(t, err)
+	require.Zero(t, results.ExitCode, "stderr=%s", results.Stderr)
+
+	assert.Contains(t, results.Stdout, `"Name": "hello"`)
+	assert.Contains(t, results.Stdout, `"Tools": 2`,
+		"reference plugin advertises two tools (greet + cloud-greet)")
+	assert.Contains(t, results.Stdout, `"HasManifest": true`,
+		"reference plugin publishes a manifest")
+	assert.Contains(t, results.Stdout, `"ManifestTitle": "Hello plugin (reference)"`)
+}
+
+// TestPlugin_AdvancedPluginInfo exercises the 'azldev advanced plugin
+// info <name>' admin command and confirms it surfaces the resolved
+// destination for both grafted and namespace-fallback tools.
+func TestPlugin_AdvancedPluginInfo(t *testing.T) {
+	t.Parallel()
+
+	pluginBin := pluginTestSetup(t)
+
+	results, err := cmdtest.NewScenarioTest(
+		"--plugin", pluginBin,
+		"-O", "json",
+		"advanced", "plugin", "info", "hello",
+		"--color=never",
+	).Locally().Run(t)
+	require.NoError(t, err)
+	require.Zero(t, results.ExitCode, "stderr=%s", results.Stderr)
+
+	assert.Contains(t, results.Stdout, `"Destination": "azldev component cloud-greet"`,
+		"info should report grafted destination for cloud-greet")
+	assert.Contains(t, results.Stdout, `"Destination": "azldev plugin hello greet"`,
+		"info should report namespace destination for greet")
+	assert.Contains(t, results.Stdout, `"protocol-version": 1`,
+		"info should embed the parsed manifest")
+}

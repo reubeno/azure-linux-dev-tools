@@ -700,6 +700,7 @@ func (a *App) loadAndRegisterPlugins(ctx context.Context, env *Env) error {
 	}
 
 	a.plugins = loaded
+	env.SetLoadedPlugins(loaded)
 
 	return nil
 }

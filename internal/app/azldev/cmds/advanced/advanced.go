@@ -27,5 +27,6 @@ output but fully supported.`,
 	downloadsources.OnAppInit(app, cmd)
 	mcpOnAppInit(app, cmd)
 	mockOnAppInit(app, cmd)
+	pluginOnAppInit(app, cmd)
 	wgetOnAppInit(app, cmd)
 }

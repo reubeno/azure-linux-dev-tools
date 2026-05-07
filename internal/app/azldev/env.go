@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/gum/confirm"
 	"github.com/charmbracelet/x/term"
 	"github.com/mattn/go-isatty"
+	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/plugins"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/lockfile"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
@@ -97,6 +98,11 @@ type Env struct {
 	// lockStore provides cached access to per-component lock files.
 	// Nil when no project directory is configured.
 	lockStore *lockfile.Store
+
+	// loadedPlugins are the live plugin handles for this azldev invocation.
+	// Populated after the plugin loader has spawned and registered them
+	// (see [App.loadAndRegisterPlugins]); nil when no plugins were loaded.
+	loadedPlugins []*plugins.Plugin
 }
 
 // Constructs a new [Env] using specified options.
@@ -434,6 +440,20 @@ func (env *Env) SetReportFile(reportFile io.Writer) {
 // command results.
 func (env *Env) OutputWriter() io.Writer {
 	return env.reportFile
+}
+
+// LoadedPlugins returns the live plugin handles available for this azldev
+// invocation. Empty when no plugins were loaded via '--plugin'. Read-only
+// view; callers must not mutate the slice or the plugins themselves.
+func (env *Env) LoadedPlugins() []*plugins.Plugin {
+	return env.loadedPlugins
+}
+
+// SetLoadedPlugins records the plugin handles owned by [App] for this
+// invocation so admin commands can introspect them. Called by the App
+// after plugin loading completes.
+func (env *Env) SetLoadedPlugins(loaded []*plugins.Plugin) {
+	env.loadedPlugins = loaded
 }
 
 // Resolves the environment's default "distro" -- i.e., the distro that is being built in and against.

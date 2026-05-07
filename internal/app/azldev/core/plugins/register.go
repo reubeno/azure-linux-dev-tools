@@ -27,11 +27,11 @@ const pluginGroupTitle = "Plugin commands:"
 const pluginCommandUse = "plugin"
 
 // reservedTopLevelNames lists Cobra command names at the root that plugins
-// must never collide with, in any phase. The MVP only enforces collisions
-// against the literal 'plugin' parent (since that's where MVP places things);
-// later phases will use this list for graft-collision checks.
+// must never collide with, in any phase. These names are treated as
+// reserved during graft validation by [tryGraft] and are also the only
+// names protected by [assertNoTopLevelCollision].
 //
-//nolint:gochecknoglobals,unused // referenced by upcoming phases; keeping co-located reduces drift.
+//nolint:gochecknoglobals // effectively constant.
 var reservedTopLevelNames = []string{
 	"help",
 	"completion",
@@ -66,15 +66,24 @@ func (stdoutHost) AddFixSuggestion(_ string) {}
 // supplied plugin, registers one Cobra subcommand per advertised tool under
 // 'plugin <plugin-name> <tool-name>'.
 //
+// Register adds plugin commands to root, attempting to graft each
+// advertised tool at the path requested by its '_meta.azldev.command-path'
+// hint. Tools that don't request a graft path — or whose request fails
+// validation (reserved root, leaf collision, blocked intermediate
+// segment) — fall back to the namespace 'plugin <plugin-name>
+// <tool-name>'. Collisions and other graft failures are warned but not
+// fatal.
+//
 // Tools whose input schema is not representable in MVP (see [addToolFlags])
 // are skipped with a warning; other tools from the same plugin remain
-// usable. If two plugins report the same canonical name, registration fails:
-// the user is asked to disambiguate by choosing different binaries.
+// usable. If two plugins report the same canonical name, registration
+// fails: the user is asked to disambiguate by choosing different binaries.
 //
 // Register is a no-op (and adds no group) when the plugin slice is empty.
 //
-// Pass a non-nil [Host] to integrate output and fix-suggestion routing with
-// the host application; pass nil to fall back to a writes-to-stdout host.
+// Pass a non-nil [Host] to integrate output and fix-suggestion routing
+// with the host application; pass nil to fall back to a writes-to-stdout
+// host.
 func Register(root *cobra.Command, host Host, loaded []*Plugin) error {
 	if len(loaded) == 0 {
 		return nil
@@ -92,24 +101,105 @@ func Register(root *cobra.Command, host Host, loaded []*Plugin) error {
 		return err
 	}
 
-	parent := newPluginParentCommand()
+	// Lazily-built fallback parent and per-plugin sub-namespace map. We
+	// only attach the 'plugin' parent to root if at least one tool ends
+	// up in the namespace.
+	var fallbackParent *cobra.Command
 
-	if !rootHasGroup(root, CommandGroupID) {
-		root.AddGroup(&cobra.Group{
-			ID:    CommandGroupID,
-			Title: pluginGroupTitle,
-		})
-	}
-
-	parent.GroupID = CommandGroupID
+	pluginNamespaces := make(map[string]*cobra.Command)
 
 	for _, plugin := range loaded {
-		parent.AddCommand(newPluginCommand(host, plugin))
+		registerPluginTools(root, host, plugin, &fallbackParent, pluginNamespaces)
 	}
 
-	root.AddCommand(parent)
+	if fallbackParent != nil {
+		ensurePluginsGroup(root)
+
+		fallbackParent.GroupID = CommandGroupID
+		root.AddCommand(fallbackParent)
+	}
 
 	return nil
+}
+
+// registerPluginTools handles a single plugin: for each advertised tool it
+// builds the leaf cobra.Command, then either grafts it at the requested
+// path or stages it for namespace placement. Mutates the *fallbackParent
+// pointer the first time a fallback is needed so the caller can lazily
+// attach it to root.
+func registerPluginTools(
+	root *cobra.Command, host Host, plugin *Plugin,
+	fallbackParent **cobra.Command, pluginNamespaces map[string]*cobra.Command,
+) {
+	for _, tool := range plugin.Tools() {
+		toolCmd, err := newToolCommand(host, plugin, tool)
+		if err != nil {
+			slog.Warn("skipping plugin tool with unsupported input schema",
+				"plugin", plugin.Name(),
+				"tool", tool.Name,
+				"err", err,
+			)
+
+			continue
+		}
+
+		if attemptedGraft(root, plugin, tool, toolCmd) {
+			continue
+		}
+
+		// Fallback: place under 'plugin <plugin-name> <tool-name>'.
+		if *fallbackParent == nil {
+			*fallbackParent = newPluginParentCommand()
+		}
+
+		sub, ok := pluginNamespaces[plugin.Name()]
+		if !ok {
+			sub = newPluginNamespaceCommand(plugin)
+			pluginNamespaces[plugin.Name()] = sub
+			(*fallbackParent).AddCommand(sub)
+		}
+
+		sub.AddCommand(toolCmd)
+	}
+}
+
+// attemptedGraft tries to install toolCmd at the path declared by the
+// tool's metadata. Returns true if the tool was successfully grafted (and
+// thus should not be installed in the fallback namespace). On any failure
+// (including absent or invalid hints) returns false and emits a debug or
+// warning log line so users can see what happened.
+func attemptedGraft(root *cobra.Command, plugin *Plugin, tool mcp.Tool, toolCmd *cobra.Command) bool {
+	hints, err := parseToolGraftHints(tool)
+	if err != nil {
+		slog.Warn("invalid plugin tool graft hints; using namespace fallback",
+			"plugin", plugin.Name(), "tool", tool.Name, "err", err)
+
+		return false
+	}
+
+	if hints == nil || len(hints.CommandPath) == 0 {
+		// No opt-in to grafting: route to namespace silently.
+		return false
+	}
+
+	if err := tryGraft(root, toolCmd, plugin, hints); err != nil {
+		slog.Warn("plugin tool graft path rejected; using namespace fallback",
+			"plugin", plugin.Name(),
+			"tool", tool.Name,
+			"command-path", hints.CommandPath,
+			"err", err,
+		)
+
+		return false
+	}
+
+	slog.Debug("grafted plugin tool",
+		"plugin", plugin.Name(),
+		"tool", tool.Name,
+		"command-path", hints.CommandPath,
+	)
+
+	return true
 }
 
 // newPluginParentCommand constructs the top-level 'plugin' command node. It
@@ -126,36 +216,45 @@ them for tool-specific usage information.`,
 	}
 }
 
-// newPluginCommand constructs the per-plugin namespace command (the middle
-// node in 'plugin <plugin-name> <tool-name>'). Tool subcommands are added as
-// children.
-func newPluginCommand(host Host, plugin *Plugin) *cobra.Command {
+// newPluginNamespaceCommand constructs the per-plugin namespace command
+// (the middle node in 'plugin <plugin-name> <tool-name>'). Tool subcommands
+// are added by the caller as we resolve each tool's destination.
+func newPluginNamespaceCommand(plugin *Plugin) *cobra.Command {
 	short := fmt.Sprintf("Tools from plugin %#q", plugin.Name())
 	if plugin.Version() != "" {
 		short = fmt.Sprintf("Tools from plugin %#q (v%s)", plugin.Name(), plugin.Version())
 	}
 
-	cmd := &cobra.Command{
+	if title := pluginDisplayTitle(plugin); title != "" {
+		short = title
+	}
+
+	return &cobra.Command{
 		Use:   plugin.Name(),
 		Short: short,
+		Long:  pluginDisplayLong(plugin),
+	}
+}
+
+// pluginDisplayTitle returns the manifest-supplied display title if any.
+// Empty when the plugin didn't publish a manifest or didn't override the
+// title.
+func pluginDisplayTitle(plugin *Plugin) string {
+	if m := plugin.Manifest(); m != nil {
+		return m.Title
 	}
 
-	for _, tool := range plugin.Tools() {
-		toolCmd, err := newToolCommand(host, plugin, tool)
-		if err != nil {
-			slog.Warn("skipping plugin tool with unsupported input schema",
-				"plugin", plugin.Name(),
-				"tool", tool.Name,
-				"err", err,
-			)
+	return ""
+}
 
-			continue
-		}
-
-		cmd.AddCommand(toolCmd)
+// pluginDisplayLong returns the manifest-supplied long-form plugin
+// description, or empty when none is available.
+func pluginDisplayLong(plugin *Plugin) string {
+	if m := plugin.Manifest(); m != nil {
+		return m.Description
 	}
 
-	return cmd
+	return ""
 }
 
 // newToolCommand constructs the leaf Cobra command for a single MCP tool.

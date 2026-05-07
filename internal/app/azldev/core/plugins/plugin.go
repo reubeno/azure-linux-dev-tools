@@ -68,6 +68,9 @@ type Plugin struct {
 	client *client.Client
 	// tools is the catalog returned by tools/list during Spawn.
 	tools []mcp.Tool
+	// manifest is the parsed azldev://manifest resource, or nil when the
+	// plugin doesn't publish one.
+	manifest *Manifest
 
 	// closeOnce ensures Close is idempotent.
 	closeOnce sync.Once
@@ -122,20 +125,30 @@ func Spawn(ctx context.Context, path string, args []string, env []string) (plugi
 		return nil, fmt.Errorf("%w from %#q:\n%w", ErrPluginListTools, name, err)
 	}
 
+	manifest, err := readManifest(ctx, mcpClient)
+	if err != nil {
+		// A malformed/version-mismatched manifest is a hard error. We
+		// surface it via the handshake category since it's effectively a
+		// negotiation problem between azldev and the plugin.
+		return nil, fmt.Errorf("%w at %#q:\n%w", ErrPluginInitialize, path, err)
+	}
+
 	slog.Debug(
 		"loaded plugin",
 		"plugin", name,
 		"version", initResult.ServerInfo.Version,
 		"path", path,
 		"tools", len(listResult.Tools),
+		"has-manifest", manifest != nil,
 	)
 
 	return &Plugin{
-		path:    path,
-		name:    name,
-		version: initResult.ServerInfo.Version,
-		client:  mcpClient,
-		tools:   listResult.Tools,
+		path:     path,
+		name:     name,
+		version:  initResult.ServerInfo.Version,
+		client:   mcpClient,
+		tools:    listResult.Tools,
+		manifest: manifest,
 	}, nil
 }
 
@@ -161,6 +174,13 @@ func (p *Plugin) Version() string {
 // is owned by the Plugin; callers must not mutate it.
 func (p *Plugin) Tools() []mcp.Tool {
 	return p.tools
+}
+
+// Manifest returns the parsed plugin-level manifest (the contents of the
+// 'azldev://manifest' MCP resource), or nil when the plugin does not
+// publish one.
+func (p *Plugin) Manifest() *Manifest {
+	return p.manifest
 }
 
 // Call invokes the named tool on the plugin and returns the concatenated
