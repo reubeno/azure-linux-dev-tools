@@ -135,12 +135,17 @@ func validateCommitSHA(context string, ref string) error {
 	return nil
 }
 
-// TmtProvisionConfig holds the projection of tmt's `provision` step. MVP only projects
-// `how`; additional knobs (memory, disk, etc.) are handled via [TmtConfig.ProvisionExtraArgs].
+// TmtProvisionConfig holds the projection of tmt's `provision` step. MVP projects
+// `how`; additional knobs (memory, disk, etc.) are passed through [ExtraArgs] for now
+// and may be lifted into named fields as we earn the need.
 type TmtProvisionConfig struct {
 	// How selects the tmt provision plugin. Optional; if empty, tmt's default applies.
 	// MVP supports "virtual" only.
 	How TmtProvisionHow `toml:"how,omitempty" json:"how,omitempty" jsonschema:"enum=virtual,title=How,description=tmt provision plugin (MVP supports only 'virtual')"`
+
+	// ExtraArgs are passed verbatim after `provision -h <how>`. Forbidden flags:
+	// --image (managed by azldev to inject the image-under-test).
+	ExtraArgs []string `toml:"extra-args,omitempty" json:"extraArgs,omitempty" jsonschema:"title=Extra args,description=Verbatim args inserted after 'provision -h <how>' (cannot include --image)"`
 }
 
 // TmtConfig holds configuration specific to tmt-based test suites.
@@ -169,10 +174,6 @@ type TmtConfig struct {
 	// PlanExtraArgs are passed verbatim after `plan -n <plan>`.
 	PlanExtraArgs []string `toml:"plan-extra-args,omitempty" json:"planExtraArgs,omitempty" jsonschema:"title=Plan extra args,description=Verbatim args inserted after 'plan -n <plan>'"`
 
-	// ProvisionExtraArgs are passed verbatim after `provision -h <how>`.
-	// Forbidden flags: --image (managed by azldev to inject the image-under-test).
-	ProvisionExtraArgs []string `toml:"provision-extra-args,omitempty" json:"provisionExtraArgs,omitempty" jsonschema:"title=Provision extra args,description=Verbatim args inserted after 'provision -h <how>' (cannot include --image)"`
-
 	// CloudInitRuncmds is a list of shell commands to run during cloud-init's runcmd
 	// phase on the provisioned guest. Each entry is one runcmd line; the runner injects
 	// them via tmt's TMT_PLUGINS extension point (a small Python file that appends to
@@ -184,7 +185,7 @@ type TmtConfig struct {
 	// tmt's `prepare` step instead.
 	CloudInitRuncmds []string `toml:"cloud-init-runcmds,omitempty" json:"cloudInitRuncmds,omitempty" jsonschema:"title=Cloud-init runcmds,description=Shell commands run during cloud-init runcmd on the guest (before tmt's boot-complete probe). Use for first-boot fixups (e.g., open a firewall port)."`
 
-	// Provision configures the tmt provision step. Only 'how' is projected for MVP.
+	// Provision configures the tmt provision step.
 	Provision TmtProvisionConfig `toml:"provision,omitempty" json:"provision,omitempty" jsonschema:"title=Provision,description=tmt provision step configuration"`
 }
 
@@ -221,8 +222,8 @@ func (t *TmtConfig) Validate(suiteName string) error {
 		return err
 	}
 
-	if err := validateExtraArgs(suiteName, "tmt.provision-extra-args",
-		t.ProvisionExtraArgs, forbiddenProvisionExtraArgs); err != nil {
+	if err := validateExtraArgs(suiteName, "tmt.provision.extra-args",
+		t.Provision.ExtraArgs, forbiddenProvisionExtraArgs); err != nil {
 		return err
 	}
 
@@ -404,15 +405,17 @@ func (t *TestSuiteConfig) WithAbsolutePaths(referenceDir string) *TestSuiteConfi
 		}
 
 		result.Tmt = &TmtConfig{
-			Source:             t.Tmt.Source,
-			Plan:               t.Tmt.Plan,
-			PipExtras:          append([]string(nil), t.Tmt.PipExtras...),
-			Context:            ctxCopy,
-			RunExtraArgs:       append([]string(nil), t.Tmt.RunExtraArgs...),
-			PlanExtraArgs:      append([]string(nil), t.Tmt.PlanExtraArgs...),
-			ProvisionExtraArgs: append([]string(nil), t.Tmt.ProvisionExtraArgs...),
-			CloudInitRuncmds:   append([]string(nil), t.Tmt.CloudInitRuncmds...),
-			Provision:          t.Tmt.Provision,
+			Source:           t.Tmt.Source,
+			Plan:             t.Tmt.Plan,
+			PipExtras:        append([]string(nil), t.Tmt.PipExtras...),
+			Context:          ctxCopy,
+			RunExtraArgs:     append([]string(nil), t.Tmt.RunExtraArgs...),
+			PlanExtraArgs:    append([]string(nil), t.Tmt.PlanExtraArgs...),
+			CloudInitRuncmds: append([]string(nil), t.Tmt.CloudInitRuncmds...),
+			Provision: TmtProvisionConfig{
+				How:       t.Tmt.Provision.How,
+				ExtraArgs: append([]string(nil), t.Tmt.Provision.ExtraArgs...),
+			},
 		}
 	}
 

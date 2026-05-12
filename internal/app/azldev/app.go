@@ -426,32 +426,35 @@ func (a *App) initializeProjectConfig(envOptions *EnvOptions, earlyTempDirPath s
 	return nil
 }
 
-// setupSignalHandling installs a signal handler that translates SIGINT, SIGTERM, and
-// SIGHUP into a context cancellation. It uses Go's idiomatic
-// [signal.Notify] + cancel pattern to give in-flight commands a chance to unwind
-// cleanly via their deferred cleanup.
+// setupSignalHandling installs signal handlers that translate SIGINT and SIGTERM into
+// a context cancellation so in-flight commands can unwind cleanly via their deferred
+// cleanup, and that explicitly ignore SIGHUP so long-running commands survive the
+// closure of their controlling terminal.
 //
-// Two practical concerns this addresses:
+// Signal semantics rationale:
 //
-//   - **SIGHUP from a closing terminal.** When azldev is launched from a script that
-//     itself exits (e.g., backgrounded with `&` from a non-interactive shell), the
-//     parent's death sends SIGHUP to azldev. Without an explicit handler, Go's runtime
-//     terminates the program *without running deferred functions* — so per-runner
-//     cleanup (libvirt guests, qcow2 images, etc.) is skipped. We catch SIGHUP so
-//     deferred cleanup runs.
-//
-//   - **Escape hatch on a second signal.** If a deferred cleanup itself hangs (e.g.,
-//     a stuck libvirt RPC), the user must be able to force-exit. After the first
-//     signal, the next SIGINT/SIGTERM/SIGHUP forces an unconditional [os.Exit].
-//     The forced-exit is logged so the user understands that cleanup may not have
-//     completed and can investigate the leaked artifacts manually.
+//   - **SIGINT (Ctrl-C) / SIGTERM**: user-initiated cancellation. We cancel the context
+//     so the active command (e.g., a tmt suite mid-boot) gets a chance to clean up its
+//     subprocess + libvirt state before the program exits.
+//   - **SIGHUP**: the controlling terminal hung up. For interactive CLIs in a foreground
+//     shell, a Ctrl-C propagates as SIGINT — SIGHUP is *not* the normal cancel path. The
+//     scenario where SIGHUP arrives is typically: the user backgrounded `azldev` and
+//     their shell exited, or an SSH session disconnected mid-run. In either case, the
+//     intent is overwhelmingly "let the long-running work finish", not "abort it" —
+//     this matches `nohup` semantics and how every long-running CLI in the ecosystem
+//     behaves. We log the signal once at info level (so the operator can correlate later
+//     in the log) and continue.
+//   - **Escape hatch**: on a *second* SIGINT or SIGTERM, we force-exit immediately. This
+//     covers the case where deferred cleanup itself hangs (e.g., a stuck libvirt RPC).
+//     The forced-exit is logged at error level so the operator understands cleanup may
+//     not have completed and can inspect the workdir for leaked artifacts.
 func (*App) setupSignalHandling(cancel context.CancelFunc) {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, unix.SIGTERM, unix.SIGHUP)
+	cancelSigs := make(chan os.Signal, 1)
+	signal.Notify(cancelSigs, os.Interrupt, unix.SIGTERM)
 
 	go func() {
-		// First signal: cancel the context so deferred cleanups can run.
-		sig := <-sigs
+		// First cancel signal: cancel the context so deferred cleanups can run.
+		sig := <-cancelSigs
 
 		slog.Warn("Interrupt detected; cancelling and unwinding "+
 			"(send another signal to force-exit if cleanup hangs)",
@@ -459,17 +462,30 @@ func (*App) setupSignalHandling(cancel context.CancelFunc) {
 
 		cancel()
 
-		// Subsequent signals: force-exit. We restore default disposition for the
+		// Subsequent signal: force-exit. We restore default disposition for the
 		// signal first so even Go's runtime won't intercept; this makes the second
 		// Ctrl-C behave like a vanilla program's would.
-		sig = <-sigs
+		sig = <-cancelSigs
 
 		slog.Error("Second signal received; force-exiting "+
 			"(in-flight cleanup may not have completed; check libvirt for leaked guests)",
 			slog.String("kind", sig.String()))
 
-		signal.Stop(sigs)
+		signal.Stop(cancelSigs)
 		os.Exit(forcedExitCode)
+	}()
+
+	// SIGHUP: log once and ignore. Without this, Go's default-handler kills the
+	// process without running deferred cleanup the moment the controlling terminal
+	// goes away — exactly the situation a long-running command should survive.
+	hupSigs := make(chan os.Signal, 1)
+	signal.Notify(hupSigs, unix.SIGHUP)
+
+	go func() {
+		for sig := range hupSigs {
+			slog.Info("Ignoring SIGHUP; continuing detached from controlling terminal",
+				slog.String("kind", sig.String()))
+		}
 	}()
 }
 

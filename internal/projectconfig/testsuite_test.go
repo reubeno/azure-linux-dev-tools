@@ -323,9 +323,9 @@ func TestTmtConfig_Validate(t *testing.T) {
 		}
 	})
 
-	t.Run("forbidden --image in provision-extra-args", func(t *testing.T) {
+	t.Run("forbidden --image in provision.extra-args", func(t *testing.T) {
 		suite := tmtSuite(func(c *projectconfig.TmtConfig) {
-			c.ProvisionExtraArgs = []string{"--image=/somewhere/else.qcow2"}
+			c.Provision.ExtraArgs = []string{"--image=/somewhere/else.qcow2"}
 		})
 		err := suite.Validate()
 		require.Error(t, err)

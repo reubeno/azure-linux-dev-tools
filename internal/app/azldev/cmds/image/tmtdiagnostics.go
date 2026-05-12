@@ -6,22 +6,41 @@ package image
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/tmt"
+)
+
+const (
+	// azldevResultsFileName is the file emitted by the runner with structured
+	// per-test results. Format is the azldev contract for run consumers; it is the
+	// human/script-friendly companion to azldev's typed-output system.
+	azldevResultsFileName = "azldev-results.json"
+	// azldevRunFileName is the file emitted by the runner with per-run metadata
+	// (suite name, VM name, tmt version, timestamps, final status, error class).
+	azldevRunFileName = "azldev-run.json"
+	// hostEnvFileName captures host-side facts (OS, kernel, virsh/qemu/tmt versions,
+	// etc.) at the start of each run so failure reports include them without further
+	// digging.
+	hostEnvFileName = "host-env.txt"
+
+	// resultsFileMode is the permission used for files we write in the run dir.
+	resultsFileMode = 0o600
+	// dstDirMode is the permission used when creating parent dirs for emitted artifacts.
+	dstDirMode = 0o755
 )
 
 // tmtRunMetadata is the per-run companion file written next to azldev-results.json.
 // While azldev-results.json holds per-test rows, this file holds run-level metadata
-// suitable for indexing/aggregation: which suite, which image, which VM, when, and how
-// it ended.
+// suitable for indexing/aggregation: which suite, which image, which VM, when, and
+// how it ended.
 type tmtRunMetadata struct {
 	RunID        string `json:"runId"`
 	Suite        string `json:"suite"`
@@ -52,15 +71,53 @@ func writeRunMetadata(runDir string, meta tmtRunMetadata) error {
 	return nil
 }
 
+// writeAzldevResultsFile emits the structured per-test results next to the run dir as
+// a human/script-friendly JSON sidecar. This is the durable, on-disk form of the same
+// data returned through the runner; the in-process [ImageTestResult] flow is what
+// the CLI table/JSON output uses.
+func writeAzldevResultsFile(runDir string, entries []tmt.ResultEntry) error {
+	type fileEntry struct {
+		Name            string  `json:"name"`
+		Status          string  `json:"status"`
+		DurationSeconds float64 `json:"durationSeconds"`
+		OutputPath      string  `json:"outputPath,omitempty"`
+	}
+
+	out := make([]fileEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, fileEntry{
+			Name:            e.Name,
+			Status:          e.Status,
+			DurationSeconds: e.Duration.Seconds(),
+			OutputPath:      e.OutputPath,
+		})
+	}
+
+	outPath := filepath.Join(runDir, azldevResultsFileName)
+
+	jsonBytes, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal results JSON:\n%w", err)
+	}
+
+	if err := os.WriteFile(outPath, jsonBytes, resultsFileMode); err != nil {
+		return fmt.Errorf("failed to write %#q:\n%w", outPath, err)
+	}
+
+	slog.Info("Wrote structured results", slog.String("path", outPath))
+
+	return nil
+}
+
 // writeHostEnvFile dumps a snapshot of host-side facts (OS, kernel, virsh/qemu/tmt
 // versions, KVM availability, SELinux state) into <run-dir>/host-env.txt at the start
 // of each run. Failure-report quality is dramatically better when this is captured
 // up-front rather than reconstructed from the user's recollection.
 //
-// All commands here are best-effort — if any tool is missing, we record "n/a" for that
-// line rather than aborting the run.
-func writeHostEnvFile(env *azldev.Env, prep *tmtRunPrep) error {
-	out := filepath.Join(prep.runDir, hostEnvFileName)
+// All commands here are best-effort — if any tool is missing, we record "n/a" for
+// that line rather than aborting the run.
+func writeHostEnvFile(env *azldev.Env, runDir string) error {
+	outPath := filepath.Join(runDir, hostEnvFileName)
 
 	probes := []struct {
 		label string
@@ -71,13 +128,12 @@ func writeHostEnvFile(env *azldev.Env, prep *tmtRunPrep) error {
 		{"os-release", []string{"cat", "/etc/os-release"}},
 		{"virsh-version", []string{"virsh", "--version"}},
 		{"qemu-version", []string{"qemu-system-x86_64", "-version"}},
-		{"tmt-version", []string{filepath.Join(prep.venvDir, "bin", tmtBinName), "--version"}},
 		{"selinux", []string{"getenforce"}},
 	}
 
 	var lines strings.Builder
 
-	lines.WriteString(fmt.Sprintf("# host environment captured for tmt run %s\n", filepath.Base(prep.runDir)))
+	lines.WriteString(fmt.Sprintf("# host environment captured for tmt run %s\n", filepath.Base(runDir)))
 	lines.WriteString(fmt.Sprintf("go-arch: %s\n", runtime.GOARCH))
 	lines.WriteString(fmt.Sprintf("go-os: %s\n\n", runtime.GOOS))
 
@@ -95,8 +151,8 @@ func writeHostEnvFile(env *azldev.Env, prep *tmtRunPrep) error {
 		lines.WriteString("missing\n")
 	}
 
-	if err := os.WriteFile(out, []byte(lines.String()), resultsFileMode); err != nil {
-		return fmt.Errorf("failed to write %#q:\n%w", out, err)
+	if err := os.WriteFile(outPath, []byte(lines.String()), resultsFileMode); err != nil {
+		return fmt.Errorf("failed to write %#q:\n%w", outPath, err)
 	}
 
 	return nil
@@ -128,14 +184,43 @@ func captureProbeOutput(env *azldev.Env, command []string) string {
 	return out.String()
 }
 
+// publishJUnit copies the JUnit XML produced by tmt to the user-requested path. If
+// the source is missing (because tmt didn't get far enough to emit it), this is a
+// best-effort no-op with a warning logged by the caller.
+func publishJUnit(_ *azldev.Env, srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("junit source %#q not readable: %w", srcPath, err)
+	}
+
+	defer func() { _ = src.Close() }()
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), dstDirMode); err != nil {
+		return fmt.Errorf("failed to ensure junit dst parent:\n%w", err)
+	}
+
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("failed to create junit dst %#q:\n%w", dstPath, err)
+	}
+
+	defer func() { _ = dst.Close() }()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("failed to copy junit:\n%w", err)
+	}
+
+	return nil
+}
+
 // findProvisionConsoleLogs returns the absolute paths of console-log files written by
 // tmt's provision step into the run dir, one per provisioned guest. tmt's `cleanup`
-// step (which we always enable via `--all`) materializes these as real files inside
-// `<run-dir>/plans/<plan>/provision/<guest>/logs/console.txt`. Returns an empty slice
+// step (which runs in-band thanks to tmt's --all) materializes these as real files
+// inside `<run-dir>/<plan>/provision/<guest>/logs/console.txt`. Returns an empty slice
 // if the provision step never produced logs.
-func findProvisionConsoleLogs(prep *tmtRunPrep) []string {
-	planPath := strings.TrimPrefix(prep.tmtConfig.Plan, "/")
-	provisionDir := filepath.Join(prep.runDir, planPath, "provision")
+func findProvisionConsoleLogs(runDir, plan string) []string {
+	planPath := strings.TrimPrefix(plan, "/")
+	provisionDir := filepath.Join(runDir, "plans", planPath, "provision")
 
 	entries, err := os.ReadDir(provisionDir)
 	if err != nil {
@@ -159,233 +244,38 @@ func findProvisionConsoleLogs(prep *tmtRunPrep) []string {
 	return logs
 }
 
-// extractAndPersistResults parses tmt's results.yaml and writes the structured JSON
-// sidecar. Best-effort: returns whatever entries it could extract; warnings are logged
-// but never fatal.
-func extractAndPersistResults(env *azldev.Env, prep *tmtRunPrep, suiteName string) []tmtResultEntry {
-	tmtResults, extractErr := extractTmtResults(env, prep.runDir, prep.tmtConfig.Plan)
-	if extractErr != nil {
-		slog.Warn("Failed to extract structured tmt results",
-			slog.String("suite", suiteName),
-			slog.String("err", extractErr.Error()))
+// printFailureDiagnostics emits a "to investigate" block of concrete file pointers
+// and recovery commands so the user has a single place to start diagnosing without
+// grepping. The block is emitted as one slog.Error line followed by per-pointer info
+// lines so it is visible without --verbose.
+func printFailureDiagnostics(runDir, suiteName, plan string, result *tmt.Result) {
+	errorClass := ""
+	errorSummary := ""
+	vmName := ""
 
-		return tmtResults
+	if result != nil {
+		errorClass = result.ErrorClass
+		errorSummary = result.ErrorSummary
+		vmName = result.VMName
 	}
 
-	if writeErr := writeAzldevResultsFile(prep.runDir, tmtResults); writeErr != nil {
-		slog.Warn("Failed to write structured results JSON",
-			slog.String("suite", suiteName),
-			slog.String("err", writeErr.Error()))
-	} else {
-		slog.Info("Wrote structured results",
-			slog.String("suite", suiteName),
-			slog.String("path", filepath.Join(prep.runDir, azldevResultsFileName)))
-	}
-
-	return tmtResults
-}
-
-// publishJUnitIfRequested copies the in-run-dir junit.xml that tmt's JUnit reporter
-// produced (if any) to the user-supplied --junit-xml path. No-op when --junit-xml
-// wasn't requested.
-func publishJUnitIfRequested(
-	env *azldev.Env, prep *tmtRunPrep, options *ImageTestOptions, suiteName string,
-) {
-	if prep.junitOutPath == "" {
-		return
-	}
-
-	if junitErr := publishJUnit(env, prep.junitOutPath, options.JUnitXMLPath); junitErr != nil {
-		slog.Warn("Failed to publish JUnit XML",
-			slog.String("suite", suiteName),
-			slog.String("from", prep.junitOutPath),
-			slog.String("to", options.JUnitXMLPath),
-			slog.String("err", junitErr.Error()))
-	}
-}
-
-// finalizeRun captures the VM name (when discoverable), writes the per-run metadata
-// sidecar, and prints either a "to investigate" diagnostic block (on failure) or a
-// success log line.
-func finalizeRun(
-	env *azldev.Env, prep *tmtRunPrep, options *ImageTestOptions,
-	suiteName string, runErr error, errorClass, errorSummary string,
-	startedAt time.Time,
-) {
-	// Capture the libvirt domain name for the run, if discoverable. This makes manual
-	// cleanup unambiguous when our defer is bypassed.
-	vmName := captureVMName(env, prep)
-
-	finalStatus := TestStatusPass
-	if runErr != nil {
-		finalStatus = TestStatusError
-	}
-
-	meta := tmtRunMetadata{
-		RunID:        filepath.Base(prep.runDir),
-		Suite:        suiteName,
-		ImagePath:    options.ImagePath,
-		Plan:         prep.tmtConfig.Plan,
-		ProvisionHow: string(prep.tmtConfig.Provision.How),
-		VMName:       vmName,
-		StartedAt:    startedAt.Format(time.RFC3339),
-		FinishedAt:   time.Now().UTC().Format(time.RFC3339),
-		FinalStatus:  finalStatus,
-		ErrorClass:   errorClass,
-		ErrorSummary: errorSummary,
-	}
-
-	if metaErr := writeRunMetadata(prep.runDir, meta); metaErr != nil {
-		slog.Warn("Failed to write per-run metadata",
-			slog.String("suite", suiteName),
-			slog.String("err", metaErr.Error()))
-	}
-
-	if runErr != nil {
-		printFailureDiagnostics(prep, vmName, errorClass, errorSummary)
-	} else {
-		slog.Info("tmt suite passed",
-			slog.String("suite", suiteName),
-			slog.String("run-dir", prep.runDir))
-	}
-}
-
-// captureVMName returns the libvirt domain name that tmt assigned to this run, or "" if
-// it can't be determined. We parse <run-dir>/log.txt for the `name: tmt-XXX-YYYY` line
-// that tmt's testcloud plugin emits during provision. This is the authoritative source
-// since the name is deterministic only as a *prefix* (the random suffix is only known
-// to the live tmt process), and the log records the exact value.
-func captureVMName(_ *azldev.Env, prep *tmtRunPrep) string {
-	return vmNameFromTmtLog(prep.runDir)
-}
-
-// vmNameRe matches the testcloud-managed libvirt domain name in tmt's run log:
-// `name: tmt-XXX-YYYYYYYY`.
-var vmNameRe = regexp.MustCompile(`(?m)^\s*name:\s*(tmt-[A-Za-z0-9-]+)\s*$`)
-
-func vmNameFromTmtLog(runDir string) string {
-	logPath := filepath.Join(runDir, "log.txt")
-
-	raw, err := os.ReadFile(logPath)
-	if err != nil {
-		return ""
-	}
-
-	matches := vmNameRe.FindAllStringSubmatch(string(raw), -1)
-	if len(matches) == 0 {
-		return ""
-	}
-
-	return matches[len(matches)-1][1]
-}
-
-// classifyTmtFailure returns a short stable error class and a one-sentence proximate
-// cause for a failed tmt run. The classification is heuristic — we read <run-dir>/log.txt
-// for known patterns. If the log can't be parsed, we fall back to a generic class with
-// the original error's first line as the summary.
-func classifyTmtFailure(runDir string, runErr error) (errorClass, summary string) {
-	logPath := filepath.Join(runDir, "log.txt")
-
-	raw, readErr := os.ReadFile(logPath)
-	if readErr != nil {
-		return "tmt-internal", firstLine(runErr.Error())
-	}
-
-	logText := string(raw)
-
-	patterns := []struct {
-		class string
-		regex *regexp.Regexp
-	}{
-		{"boot-timeout", regexp.MustCompile(`(?i)Failed to boot.*has failed to boot in (\d+) seconds`)},
-		{"boot-timeout", regexp.MustCompile(`(?i)Failed to boot testcloud instance`)},
-		{"ssh-timeout", regexp.MustCompile(`(?i)guest is not reachable|connection.*refused|ssh.*timed? out|cannot connect`)},
-		{"provision-failed", regexp.MustCompile(`(?i)provision step failed`)},
-		{"execute-failed", regexp.MustCompile(`(?i)execute step failed|test.*failed`)},
-	}
-
-	for _, p := range patterns {
-		if loc := p.regex.FindStringIndex(logText); loc != nil {
-			return p.class, extractMatchedLine(logText, loc[0])
-		}
-	}
-
-	return "unknown", firstLine(runErr.Error())
-}
-
-// extractMatchedLine returns the line containing the byte offset `offset` in text, trimmed.
-func extractMatchedLine(text string, offset int) string {
-	if offset < 0 || offset >= len(text) {
-		return ""
-	}
-
-	start := offset
-	for start > 0 && text[start-1] != '\n' {
-		start--
-	}
-
-	end := offset
-	for end < len(text) && text[end] != '\n' {
-		end++
-	}
-
-	return strings.TrimSpace(text[start:end])
-}
-
-// firstLine returns the first non-empty line of s, trimmed.
-func firstLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-
-	return ""
-}
-
-// runExtraArgsHaveVerbosity returns whether the user already supplied a -v / -vv / -vvv
-// (or --verbose) flag in run-extra-args. We only auto-inject -vv when they haven't.
-func runExtraArgsHaveVerbosity(args []string) bool {
-	for _, arg := range args {
-		switch {
-		case arg == "-v" || arg == "-vv" || arg == "-vvv" || arg == "-vvvv":
-			return true
-		case arg == "--verbose":
-			return true
-		case strings.HasPrefix(arg, "--verbose="):
-			return true
-		}
-	}
-
-	return false
-}
-
-// printFailureDiagnostics emits a "to investigate" block of concrete file pointers and
-// recovery commands so the user has a single place to start diagnosing without grepping.
-// The block is emitted as one slog.Error line followed by per-pointer info lines so it
-// is visible without --verbose.
-func printFailureDiagnostics(prep *tmtRunPrep, vmName, errorClass, errorSummary string) {
 	if errorClass == "" {
 		errorClass = "unknown"
 	}
 
-	// One-line summary: the tweet-sized triage line.
 	if errorSummary == "" {
 		slog.Error("tmt suite failed",
-			slog.String("suite", prep.suiteName),
+			slog.String("suite", suiteName),
 			slog.String("errorClass", errorClass),
-			slog.String("run-dir", prep.runDir))
+			slog.String("run-dir", runDir))
 	} else {
 		slog.Error("tmt suite failed",
-			slog.String("suite", prep.suiteName),
+			slog.String("suite", suiteName),
 			slog.String("errorClass", errorClass),
 			slog.String("summary", errorSummary),
-			slog.String("run-dir", prep.runDir))
+			slog.String("run-dir", runDir))
 	}
 
-	// Build concrete pointers, only including ones that exist on disk so users don't
-	// chase phantoms.
 	type pointer struct {
 		label string
 		path  string
@@ -403,34 +293,34 @@ func printFailureDiagnostics(prep *tmtRunPrep, vmName, errorClass, errorSummary 
 		}
 	}
 
-	add("tmt run log", filepath.Join(prep.runDir, "log.txt"))
-	add("tmt stdout/stderr", filepath.Join(prep.runDir, tmtOutputFileName))
+	add("tmt run log", filepath.Join(runDir, "log.txt"))
+	add("tmt stdout/stderr", filepath.Join(runDir, tmt.OutputLogFileName))
 
-	for _, consoleLog := range findProvisionConsoleLogs(prep) {
+	for _, consoleLog := range findProvisionConsoleLogs(runDir, plan) {
 		add("serial console", consoleLog)
 	}
 
-	add("structured results JSON", filepath.Join(prep.runDir, azldevResultsFileName))
-	add("per-run metadata", filepath.Join(prep.runDir, azldevRunFileName))
-	add("host environment", filepath.Join(prep.runDir, hostEnvFileName))
+	add("structured results JSON", filepath.Join(runDir, azldevResultsFileName))
+	add("per-run metadata", filepath.Join(runDir, azldevRunFileName))
+	add("host environment", filepath.Join(runDir, hostEnvFileName))
 
 	if vmName != "" {
 		// Session libvirt qemu log lives under the user's XDG_CACHE_HOME (typically
-		// ~/.cache/libvirt). System libvirt would be /var/log/libvirt/qemu/<name>.log.
+		// ~/.cache/libvirt). System libvirt would be /var/log/libvirt/qemu/<n>.log.
 		if home, err := os.UserHomeDir(); err == nil {
 			add("libvirt session qemu log",
 				filepath.Join(home, ".cache", "libvirt", "qemu", "log", vmName+".log"))
 		}
-		// testcloud's per-VM dir lives next to the run dir under the workdir-root we
-		// pass to tmt: <run-dir-parent>/testcloud/instances/<vm-name>/.
+		// testcloud's per-VM dir lives as a sibling of the run dir under the
+		// workdir-root we pass to tmt: <run-dir-parent>/testcloud/instances/<vm-name>/.
 		add("testcloud instance dir",
-			filepath.Join(filepath.Dir(prep.runDir), "testcloud", "instances", vmName))
+			filepath.Join(filepath.Dir(runDir), "testcloud", "instances", vmName))
 	}
 
-	// Step results.yaml entries (only when non-empty and present).
+	// Per-step results.yaml entries (only when non-empty and present).
 	for _, step := range []string{"discover", "prepare", "execute"} {
-		path := filepath.Join(prep.runDir, "plans",
-			strings.TrimPrefix(prep.tmtConfig.Plan, "/"), step, "results.yaml")
+		path := filepath.Join(runDir, "plans",
+			strings.TrimPrefix(plan, "/"), step, "results.yaml")
 		if info, err := os.Stat(path); err == nil && info.Size() > int64(len("[]\n")) {
 			pointers = append(pointers, pointer{
 				label: step + " step results.yaml",
@@ -451,6 +341,6 @@ func printFailureDiagnostics(prep *tmtRunPrep, vmName, errorClass, errorSummary 
 
 	if vmName != "" {
 		slog.Error("Leaked VM name (cleanup runs automatically; for manual: " +
-			"<venv>/bin/testcloud remove -f " + vmName + "):")
+			"<venv>/bin/tmt clean guests -i " + runDir + "): " + vmName)
 	}
 }
