@@ -309,8 +309,8 @@ func (p *sourcePreparerImpl) collectOverlays(
 
 	var allOverlays []projectconfig.ComponentOverlay
 
-	if macrosFileName != "" {
-		macroOverlays, err := synthesizeMacroLoadOverlays(macrosFileName)
+	if macrosFileName != "" || len(config.Build.Undefines) > 0 {
+		macroOverlays, err := synthesizeMacroLoadOverlays(macrosFileName, config.Build.Undefines)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compute macros load overlays:\n%w", err)
 		}
@@ -753,17 +753,26 @@ func (p *sourcePreparerImpl) writeMacrosFile(component components.Component, out
 // a with flag and an explicit define), the later definition wins. The order of processing
 // is: with flags, then without flags, then explicit defines, then undefines.
 //
-// Undefines remove entries from the generated macros map. This only affects macros that
-// originate from the merged TOML configuration (with, without, and defines fields); it
-// does not undefine arbitrary system-level RPM macros. The primary use case is allowing
-// a component-level TOML file to override a distro-level or project-level default by
-// removing a macro that would otherwise be emitted into the macros file.
+// Undefines are processed in two complementary places:
+//
+//  1. In this function, an undefine removes the same-named entry from the locally-built
+//     map so we never emit a `%name value` line in this file that would conflict with
+//     a paired undefine. (RPM's macros file format does NOT accept the `%undefine`
+//     directive itself — `%{load:...}` parses each line as `%name body`, and treating
+//     `undefine` as a macro name conflicts with the builtin. So this file CANNOT
+//     carry the actual undefine.)
+//  2. The actual `%undefine NAME` directives are emitted directly into the spec via
+//     [synthesizeMacroLoadOverlays], which prepends them to the spec immediately
+//     after the `%{load:...}` of this file. That defeats any macro of that name
+//     defined by the chroot environment, distro setup, or any other RPM macro source.
 //
 // Note: RPM macro values can contain spaces without special escaping; everything
 // after the macro name (and separating whitespace) is treated as the macro body.
 //
 // If no macros remain after processing (empty config, or all macros removed via
 // undefines), an empty string is returned to signal that no macros file is needed.
+// Note: in that case the caller is still responsible for emitting any `%undefine`
+// overlays for the spec — see [synthesizeMacroLoadOverlays].
 func GenerateMacrosFileContents(buildConfig projectconfig.ComponentBuildConfig) string {
 	// Build a unified map of all macros. Later definitions override earlier ones.
 	// Processing order: with flags -> without flags -> explicit defines.
@@ -784,8 +793,9 @@ func GenerateMacrosFileContents(buildConfig projectconfig.ComponentBuildConfig) 
 		macros[name] = value
 	}
 
-	// Remove any macros listed in undefines. This allows component-level config to
-	// override distro-level default macro definitions by removing them entirely.
+	// Remove from the local map any macros listed in undefines so we never emit
+	// a `%name value` line in this file that contradicts the spec-level
+	// `%undefine NAME` emitted by [synthesizeMacroLoadOverlays].
 	for _, undef := range buildConfig.Undefines {
 		delete(macros, undef)
 	}
@@ -809,30 +819,80 @@ func GenerateMacrosFileContents(buildConfig projectconfig.ComponentBuildConfig) 
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func synthesizeMacroLoadOverlays(macrosFileName string) ([]projectconfig.ComponentOverlay, error) {
-	// Basic check that the macros file name is valid and doesn't require escaping.
-	if strings.ContainsFunc(macrosFileName, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '-' && r != '_' && r != '+'
-	}) {
-		return nil, fmt.Errorf(
-			"macros file name %#q contains invalid characters; does the component name contain invalid characters?",
-			macrosFileName,
+// synthesizeMacroLoadOverlays produces overlays that:
+//
+//  1. (When macrosFileName is non-empty) Inject a `%{load:...}` directive at the
+//     top of the spec to pull in the azldev-generated macros file, and register
+//     the macros file as Source9999 so mock and other tools include it in the
+//     build root.
+//  2. (When undefines is non-empty) Inject explicit `%undefine NAME` directives
+//     directly into the spec for every entry in undefines.
+//
+// The `%undefine` directive removes the named macro from RPM's global macro
+// context, defeating any definition from the chroot environment, distro setup,
+// installed package macros, or anywhere else. This is the only way `undefines`
+// can take effect against external macros, because RPM's macros-file format
+// (used by `%{load:...}`) does NOT accept `%undefine` itself — it parses every
+// non-comment line as `%name body`, treating `undefine` as a macro name, which
+// conflicts with the builtin.
+//
+// At least one of macrosFileName or undefines must be non-empty for this
+// function to produce any overlays.
+func synthesizeMacroLoadOverlays(
+	macrosFileName string, undefines []string,
+) ([]projectconfig.ComponentOverlay, error) {
+	// Sort and deduplicate undefines for deterministic output.
+	undefNames := slices.Clone(undefines)
+	slices.Sort(undefNames)
+	undefNames = slices.Compact(undefNames)
+
+	if macrosFileName == "" && len(undefNames) == 0 {
+		return nil, nil
+	}
+
+	var (
+		prependLines []string
+		overlays     []projectconfig.ComponentOverlay
+	)
+
+	if macrosFileName != "" {
+		// Basic check that the macros file name is valid and doesn't require escaping.
+		if strings.ContainsFunc(macrosFileName, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '-' && r != '_' && r != '+'
+		}) {
+			return nil, fmt.Errorf(
+				"macros file name %#q contains invalid characters; does the component name contain invalid characters?",
+				macrosFileName,
+			)
+		}
+
+		prependLines = append(prependLines,
+			"# All Azure Linux specs with overlays include this macro file, irrespective of"+
+				" whether new macros have been added.",
+			fmt.Sprintf("%%{load:%%{_sourcedir}/%s}", macrosFileName),
 		)
 	}
 
-	// We inject an overlay to prepend a line to the spec to load the macros file.
-	return []projectconfig.ComponentOverlay{
-		{
-			// Prepend the %{load:...} directive to the spec.
-			Type: projectconfig.ComponentOverlayPrependSpecLines,
-			Lines: []string{
-				"# All Azure Linux specs with overlays include this macro file, irrespective of" +
-					" whether new macros have been added.",
-				fmt.Sprintf("%%{load:%%{_sourcedir}/%s}", macrosFileName),
-				"",
-			},
-		},
-		{
+	if len(undefNames) > 0 {
+		// `%undefine` is a spec-level directive and can only be emitted into the spec
+		// directly (not into the macros file loaded via `%{load:...}`). Emitting these
+		// after the load directive (when present) makes the rendered spec
+		// self-documenting about which inherited macros are being suppressed.
+		prependLines = append(prependLines,
+			"# Forcibly undefine inherited RPM macros listed in build.undefines.")
+		for _, name := range undefNames {
+			prependLines = append(prependLines, fmt.Sprintf("%%undefine %s", name))
+		}
+	}
+
+	prependLines = append(prependLines, "")
+	overlays = append(overlays, projectconfig.ComponentOverlay{
+		Type:  projectconfig.ComponentOverlayPrependSpecLines,
+		Lines: prependLines,
+	})
+
+	if macrosFileName != "" {
+		overlays = append(overlays, projectconfig.ComponentOverlay{
 			// Ensure that the macros file is manifested as a source in the spec so that
 			// mock and other tools know it needs to be present in the build root.
 			// Use InsertSpecTag to place it after the last existing Source* tag, avoiding
@@ -840,8 +900,10 @@ func synthesizeMacroLoadOverlays(macrosFileName string) ([]projectconfig.Compone
 			Type:  projectconfig.ComponentOverlayInsertSpecTag,
 			Tag:   "Source9999", // Use a high number to avoid conflicts with existing sources.
 			Value: macrosFileName,
-		},
-	}, nil
+		})
+	}
+
+	return overlays, nil
 }
 
 // generateFileHeaderOverlay generates an overlay that prepends a header to the spec.

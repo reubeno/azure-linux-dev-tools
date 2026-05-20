@@ -329,7 +329,10 @@ func TestGenerateMacrosFileContents_ValuesWithSpaces(t *testing.T) {
 }
 
 func TestGenerateMacrosFileContents_UndefinesRemovesDefine(t *testing.T) {
-	// Undefines should remove a macro that was added via defines.
+	// Undefines should suppress the %name value line for a macro that was added
+	// via defines. (The %undefine directive itself is emitted into the spec by
+	// synthesizeMacroLoadOverlays, NOT into the macros file, because RPM's
+	// macros file format does not accept %undefine.)
 	contents := sources.GenerateMacrosFileContents(projectconfig.ComponentBuildConfig{
 		Defines: map[string]string{
 			"dist":   ".azl3",
@@ -339,33 +342,41 @@ func TestGenerateMacrosFileContents_UndefinesRemovesDefine(t *testing.T) {
 	})
 
 	assert.NotContains(t, contents, "%dist")
+	assert.NotContains(t, contents, "%undefine",
+		"macros file must not emit %%undefine; it would be parsed as a redefinition of the builtin")
 	assert.Contains(t, contents, "%vendor Microsoft")
 }
 
 func TestGenerateMacrosFileContents_UndefinesRemovesWithFlag(t *testing.T) {
-	// Undefines should be able to remove a macro generated from a with flag.
+	// Undefines should be able to suppress the %_with_FLAG line generated from a
+	// with flag. The corresponding %undefine is emitted into the spec, not here.
 	contents := sources.GenerateMacrosFileContents(projectconfig.ComponentBuildConfig{
 		With:      []string{"tests", "docs"},
 		Undefines: []string{"_with_tests"},
 	})
 
 	assert.NotContains(t, contents, "_with_tests")
+	assert.NotContains(t, contents, "%undefine")
 	assert.Contains(t, contents, "%_with_docs 1")
 }
 
 func TestGenerateMacrosFileContents_UndefinesRemovesWithoutFlag(t *testing.T) {
-	// Undefines should be able to remove a macro generated from a without flag.
+	// Undefines should be able to suppress the %_without_FLAG line generated from
+	// a without flag. The corresponding %undefine is emitted into the spec, not here.
 	contents := sources.GenerateMacrosFileContents(projectconfig.ComponentBuildConfig{
 		Without:   []string{"debug", "static"},
 		Undefines: []string{"_without_debug"},
 	})
 
 	assert.NotContains(t, contents, "_without_debug")
+	assert.NotContains(t, contents, "%undefine")
 	assert.Contains(t, contents, "%_without_static 1")
 }
 
 func TestGenerateMacrosFileContents_UndefinesNonexistentMacroIsNoop(t *testing.T) {
-	// Undefining a macro that doesn't exist should not cause an error.
+	// Undefining a macro that wasn't otherwise defined locally has no effect on
+	// this file. The spec-level %undefine still happens via
+	// synthesizeMacroLoadOverlays.
 	contents := sources.GenerateMacrosFileContents(projectconfig.ComponentBuildConfig{
 		Defines: map[string]string{
 			"vendor": "Microsoft",
@@ -374,10 +385,13 @@ func TestGenerateMacrosFileContents_UndefinesNonexistentMacroIsNoop(t *testing.T
 	})
 
 	assert.Contains(t, contents, "%vendor Microsoft")
+	assert.NotContains(t, contents, "%undefine")
 }
 
 func TestGenerateMacrosFileContents_UndefinesAllMacros(t *testing.T) {
-	// Undefining all macros should produce no macros file content.
+	// Undefining every locally-defined macro produces an empty macros file (no
+	// %name value lines remain). The spec-level %undefine directives are still
+	// emitted by synthesizeMacroLoadOverlays.
 	contents := sources.GenerateMacrosFileContents(projectconfig.ComponentBuildConfig{
 		With:    []string{"tests"},
 		Without: []string{"debug"},
@@ -385,6 +399,18 @@ func TestGenerateMacrosFileContents_UndefinesAllMacros(t *testing.T) {
 			"dist": ".azl3",
 		},
 		Undefines: []string{"_with_tests", "_without_debug", "dist"},
+	})
+
+	assert.Empty(t, contents)
+}
+
+func TestGenerateMacrosFileContents_UndefinesOnly(t *testing.T) {
+	// Undefines alone (with no with/without/defines) produce an empty file —
+	// there's nothing to emit in macros-file format. The spec-level %undefine
+	// directives are emitted by synthesizeMacroLoadOverlays based on
+	// build.undefines independently of this function.
+	contents := sources.GenerateMacrosFileContents(projectconfig.ComponentBuildConfig{
+		Undefines: []string{"fedora"},
 	})
 
 	assert.Empty(t, contents)
