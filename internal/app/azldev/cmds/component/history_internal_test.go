@@ -127,6 +127,7 @@ func TestCustomizationCollectorsCoverEveryFingerprintableField(t *testing.T) {
 
 		// ReleaseConfig.
 		"ReleaseConfig.Calculation": "release.calculation (only when non-auto)",
+		"ReleaseConfig.Counter":     "release.counter (opaque counter locator)",
 
 		// ComponentRenderConfig.
 		"ComponentRenderConfig.SkipFileFilter": "render.skip-file-filter",
@@ -212,7 +213,11 @@ func TestCollectCustomizationsEmitsEveryKind(t *testing.T) {
 			UpstreamDistro: projectconfig.DistroReference{Name: "fedora", Version: "43"},
 		},
 		Release: projectconfig.ReleaseConfig{
-			Calculation: projectconfig.ReleaseCalculationAutorelease,
+			Calculation: projectconfig.ReleaseCalculationStatic,
+			Counter: &projectconfig.ReleaseCounterConfig{
+				Source: projectconfig.ReleaseCounterSourceReleaseTag,
+				Regex:  `^([0-9]+)$`,
+			},
 		},
 		Render: projectconfig.ComponentRenderConfig{SkipFileFilter: true},
 		Packages: map[string]projectconfig.PackageConfig{
@@ -236,6 +241,7 @@ func TestCollectCustomizationsEmitsEveryKind(t *testing.T) {
 		"spec.upstream-name",
 		"spec.upstream-distro",
 		"release.calculation",
+		"release.counter",
 		"render.skip-file-filter",
 		"packages",
 		"source-files",

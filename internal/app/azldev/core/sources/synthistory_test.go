@@ -917,6 +917,7 @@ func TestBuildDirtyChange(t *testing.T) {
 			assert.Equal(t, "azldev", result.Author)
 			assert.Equal(t, "azldev@local", result.AuthorEmail)
 			assert.Equal(t, "Local changes (uncommitted)", result.Message)
+			assert.Equal(t, test.currentFingerprint, result.InputFingerprint)
 			assert.Equal(t, test.wantUpstream, result.UpstreamCommit)
 			assert.NotZero(t, result.Timestamp)
 		})

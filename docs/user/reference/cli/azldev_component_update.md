@@ -23,6 +23,9 @@ The --bump flag updates matching lock files to increment the manual-rebuild
 counter, triggering a new release. Useful for mass-rebuild scenarios (e.g.,
 toolchain bug, static library update). Orphan pruning is skipped under --bump.
 
+Every selected component with 'release.calculation = "manual"' emits a warning
+because update and --bump do not change that component's Release value.
+
 The --check-only flag runs the full pipeline but does NOT write lock files or
 prune orphans. The command exits 0 when nothing would change and exits 1 when
 any component is stale or any lock would be pruned. Intended for CI gates.

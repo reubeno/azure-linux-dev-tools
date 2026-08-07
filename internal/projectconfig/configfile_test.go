@@ -24,6 +24,45 @@ func TestProjectConfigFileValidation_DefaultProjectInfo(t *testing.T) {
 	assert.NoError(t, file.Validate())
 }
 
+func TestProjectConfigFileValidation_ReleaseCounter(t *testing.T) {
+	t.Run("valid project default", func(t *testing.T) {
+		file := projectconfig.ConfigFile{
+			DefaultComponentConfig: &projectconfig.ComponentConfig{
+				Release: projectconfig.ReleaseConfig{
+					Calculation: projectconfig.ReleaseCalculationAuto,
+					Counter: &projectconfig.ReleaseCounterConfig{
+						Source: projectconfig.ReleaseCounterSourceReleaseTag,
+						Regex:  `^([0-9]+)$`,
+					},
+				},
+			},
+		}
+
+		require.NoError(t, file.Validate())
+	})
+
+	t.Run("invalid component counter", func(t *testing.T) {
+		file := projectconfig.ConfigFile{
+			Components: map[string]projectconfig.ComponentConfig{
+				"kernel": {
+					Release: projectconfig.ReleaseConfig{
+						Calculation: projectconfig.ReleaseCalculationManual,
+						Counter: &projectconfig.ReleaseCounterConfig{
+							Source: projectconfig.ReleaseCounterSourceReleaseTag,
+							Regex:  `^([0-9]+)$`,
+						},
+					},
+				},
+			},
+		}
+
+		err := file.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "kernel")
+		assert.Contains(t, err.Error(), "manual")
+	})
+}
+
 func TestProjectConfigFileValidation_InvalidIncludePath(t *testing.T) {
 	file := projectconfig.ConfigFile{
 		Includes: []string{""},

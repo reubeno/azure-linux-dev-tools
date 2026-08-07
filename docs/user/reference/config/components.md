@@ -106,27 +106,108 @@ The `[components.<name>.release]` section controls how azldev manages the Releas
 | Field | TOML Key | Type | Required | Description |
 |-------|----------|------|----------|-------------|
 | Calculation | `calculation` | string | No | One of `"auto"` (default), `"autorelease"`, `"static"`, or `"manual"` |
+| Counter | `counter` | table | No | Overrides how `auto` or `static` locates the integral release counter |
 
 ### Calculation Modes
 
 | Mode | Behavior |
 |------|----------|
-| `auto` | Auto-detects from the spec's Release tag value. If `%autorelease` is found, rpmautospec handles it. If a static integer is found, optionally followed by `%{?dist}` or `%{dist}`, it is bumped by the synthetic commit count. |
-| `autorelease` | Explicitly declares the spec uses `%autorelease`. Skips all Release manipulation. Use this for specs with conditional `%autorelease`/`%else` fallbacks that confuse auto-detection. |
-| `static` | Explicitly declares the spec uses a static integer release. Bumps it by the synthetic commit count only when the Release tag is an integer, optionally followed by `%{?dist}` or `%{dist}`. Non-integer or other non-standard Release values (for example, `%{pkg_release}`) require `manual` or an overlay. |
-| `manual` | Skips all automatic Release manipulation. Use for components that manage their own release numbering (e.g. kernel). |
+| `auto` | Reads the prepared main-package `Release:` tag after overlays. If its value directly uses `%autorelease`, rpmautospec owns the release and the counter fallback is not evaluated. Otherwise azldev applies the configured counter, or the built-in static counter when none is configured. |
+| `autorelease` | Declares that rpmautospec owns the release. Azldev does not rewrite `Release:` or a counter. Use this when `auto` cannot recognize an indirect or conditional `%autorelease` expression. |
+| `static` | Declares that azldev owns one integral counter. Azldev applies the configured counter, or the built-in static counter when none is configured. A `Release:` tag that directly uses `%autorelease` is an error. |
+| `manual` | Declares that azldev must never change the release. Counter configuration is invalid. `component update` emits a warning for every selected manual component. |
 
-Most components use `auto` (the default) and need no release configuration. Examples:
+The built-in static counter is equivalent to this configuration:
 
 ```toml
-# Spec with conditional %autorelease that auto-detection gets wrong:
+[default-component-config.release.counter]
+source = "release-tag"
+regex = '^([0-9]+)(?:%\{\??dist\})?$'
+```
+
+It accepts only a bare integer or an integer followed by `%{?dist}` or `%{dist}`.
+Most components inherit this behavior through `auto` and need no release configuration.
+
+### Counter Sources
+
+Counter configuration is valid only with `auto` or `static`. The entire `counter`
+table is one atomic inherited value: a higher-priority counter replaces the inherited
+table rather than merging source-specific fields. An explicit `autorelease` or `manual`
+calculation clears an inherited counter fallback.
+
+#### Release-tag counter
+
+```toml
+[components.example.release]
+calculation = "static"
+
+[components.example.release.counter]
+source = "release-tag"
+regex = '^0\.([0-9]+)(?:\.git.*)$'
+```
+
+The regular expression:
+
+- is tested against every raw main-package `Release:` value after overlays;
+- must match that value exactly once and from beginning to end;
+- must contain exactly one capturing group;
+- must capture only ASCII decimal digits.
+
+Exactly one main-package `Release:` tag must match; zero or multiple matching tags are
+errors. Azldev increments only the captured span and leaves non-matching conditional
+tags unchanged.
+Leading-zero width is preserved unless the increment requires more digits. Use
+non-capturing groups (`(?:...)`) for any grouping that is not the counter.
+
+#### Spec-macro counter
+
+```toml
+[components.example.release]
+calculation = "static"
+
+[components.example.release.counter]
+source = "spec-macro"
+directive = "global"
+name = "baserelease"
+```
+
+`directive` is required and must be either `"global"` or `"define"`. After overlays,
+azldev requires exactly one physical definition matching:
+
+```spec
+%<directive> <name> <unsigned-decimal-integer>
+```
+
+`name` must be a valid RPM macro identifier beginning with a letter or underscore.
+The macro body must contain only the integer; expressions, other macros, trailing
+comments, missing definitions, and duplicate definitions are errors.
+
+### Examples
+
+Force autorelease handling for a conditional or indirect expression:
+
+```toml
 [components.gvisor-tap-vsock.release]
 calculation = "autorelease"
+```
 
-# Component that manages its own release numbering:
+Explicitly opt out of release management:
+
+```toml
 [components.kernel.release]
 calculation = "manual"
 ```
+
+When synthetic history requires a release increment, counter calculation adds the
+synthetic commit count to the selected baseline integer. Autorelease calculation
+uses that history through rpmautospec instead. Exactly one mechanism owns a
+component's release.
+
+When an `auto` or `static` component first adopts an explicit or inherited counter,
+`component update` records the prior lock fingerprint as a release-counter baseline.
+Earlier fingerprint changes remain in synthetic history and `%autochangelog`, but
+they are excluded from static counter arithmetic. This prevents migrating an existing
+component from replaying historical release bumps.
 
 ## Render Configuration
 

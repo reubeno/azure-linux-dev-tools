@@ -374,12 +374,13 @@ func toFingerprintChanges(changes []sources.FingerprintChange) []FingerprintChan
 	out := make([]FingerprintChange, len(changes))
 	for i, change := range changes {
 		out[i] = FingerprintChange{
-			Hash:           change.Hash,
-			Author:         change.Author,
-			AuthorEmail:    change.AuthorEmail,
-			Timestamp:      change.Timestamp,
-			Message:        change.Message,
-			UpstreamCommit: change.UpstreamCommit,
+			Hash:             change.Hash,
+			Author:           change.Author,
+			AuthorEmail:      change.AuthorEmail,
+			Timestamp:        change.Timestamp,
+			Message:          change.Message,
+			InputFingerprint: change.InputFingerprint,
+			UpstreamCommit:   change.UpstreamCommit,
 		}
 	}
 

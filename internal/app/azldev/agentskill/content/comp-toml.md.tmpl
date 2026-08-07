@@ -68,21 +68,51 @@ without = ["plugin_rhsm"]       # disable %bcond_with conditionals
 
 `release.calculation` controls the `Release:` tag. There are four modes:
 
-- `auto` (default) — auto-detect whether the spec uses `%autorelease` or a static
-  release and handle it accordingly. Correct for most packages.
-- `autorelease` — force `%autorelease` handling (use when auto-detection misreads a
-  spec that wraps `%autorelease` in a conditional).
-- `static` — force static-integer handling and bump the integer on render (the
-  inverse of `autorelease`).
-- `manual` — you own the `Release:` value. Use this only when render fails with a
-  "non-standard Release tag" error. **A `manual` component is not bumped by the
-  render/commit/amend cycle, so increment its release yourself in the same change**
-  (see the `azldev-update-component` skill).
+- `auto` (default) — use rpmautospec when the prepared main-package `Release:`
+  directly uses `%autorelease`; otherwise use the configured or built-in static counter.
+- `autorelease` — force rpmautospec ownership when `auto` cannot recognize an indirect
+  or conditional `%autorelease` expression.
+- `static` — require azldev to increment one configured or built-in integral counter.
+- `manual` — disable release manipulation. Update warns for every selected manual
+  component, and you must increment its release yourself.
 
 ```toml
 [components.mypackage.release]
 calculation = "manual"
 ```
+
+The built-in static counter accepts only an integer optionally followed by `%{?dist}`
+or `%{dist}`. Complex values can select an integral counter explicitly:
+
+```toml
+[components.mypackage.release]
+calculation = "static"
+
+[components.mypackage.release.counter]
+source = "release-tag"
+regex = '^0\.([0-9]+)(?:\.git.*)$'
+```
+
+The regex is tested against each main-package `Release:` tag and must fully match
+exactly one. It must contain exactly one capturing group containing only decimal
+digits. Or select one bare integral spec macro:
+
+```toml
+[components.mypackage.release.counter]
+source = "spec-macro"
+directive = "global" # or "define"
+name = "baserelease"
+```
+
+The macro name must begin with a letter or underscore, and its body must be a
+bare decimal integer.
+
+The counter table is valid only for `auto` and `static`. It is inherited atomically;
+`manual` and `autorelease` clear inherited counter fallbacks.
+
+When a counter first becomes effective, `comp update` records the previous lock
+fingerprint as its release baseline. Older changes remain in `%autochangelog` but
+do not get replayed into the newly managed static counter.
 
 ## Render configuration
 
@@ -119,9 +149,9 @@ ensure it fits the component and repository conventions.
 - **Build config:** Defines and bcond overrides are necessary and correspond to the
   spec. If `build.check.skip = true`, require a specific `build.check.skip_reason` and
   verify that fixing the tests is impractical; skipped `%check` is a last resort.
-- **Release mode:** `auto` is the default. Force `autorelease` or `static` only when
-  auto-detection is wrong. Use `manual` only for a non-standard release tag, and verify
-  the component increments its release itself.
+- **Release mode:** `auto` is the default. Force `autorelease` for indirect
+  `%autorelease`, use `static` plus a counter locator for complex integral schemes,
+  and reserve `manual` for releases azldev must never modify.
 - **Generated state:** The lock matches the final component inputs, and rendered output
   contains the intended changes without unrelated drift.
 - **Testing:** Changes that can affect RPM output were built and smoke-tested in a mock

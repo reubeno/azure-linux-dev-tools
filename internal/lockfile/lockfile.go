@@ -48,6 +48,12 @@ type ComponentLock struct {
 	// triggering a new release without any other input change.
 	ManualBump int `toml:"manual-bump,omitempty"`
 
+	// ReleaseCounterBaseline is the last input fingerprint managed before a
+	// configured static counter became effective. Static release arithmetic
+	// ignores fingerprint changes through this baseline so adopting a counter
+	// does not replay prior history. Synthetic commits and changelogs are retained.
+	ReleaseCounterBaseline string `toml:"release-counter-baseline,omitempty"`
+
 	// InputFingerprint is the hash of all render inputs (config, overlays,
 	// upstream-commit, manual-bump, distro release version). Recomputed on
 	// every update. Used to detect when inputs have changed.

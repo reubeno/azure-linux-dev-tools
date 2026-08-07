@@ -37,6 +37,9 @@ type CommitMetadata struct {
 type FingerprintChange struct {
 	CommitMetadata
 
+	// InputFingerprint is the new input fingerprint recorded by this change.
+	InputFingerprint string
+
 	// UpstreamCommit is the upstream dist-git commit hash recorded in the lock
 	// file at the time the fingerprint changed.
 	UpstreamCommit string
@@ -102,8 +105,9 @@ func FindFingerprintChanges(
 	for _, change := range entries {
 		if change.lock.InputFingerprint != prevFingerprint {
 			changes = append(changes, FingerprintChange{
-				CommitMetadata: change.meta,
-				UpstreamCommit: change.lock.UpstreamCommit,
+				CommitMetadata:   change.meta,
+				InputFingerprint: change.lock.InputFingerprint,
+				UpstreamCommit:   change.lock.UpstreamCommit,
 			})
 		}
 
@@ -464,25 +468,25 @@ func buildSyntheticCommits(
 	componentName string,
 	lockDir string,
 	currentFingerprint string,
-) (changes []FingerprintChange, importCommit string, err error) {
+) (changes []FingerprintChange, importCommit string, releaseBumpCount int, err error) {
 	projectRepo, projectRepoDir, err := openProjectRepo(config, componentName)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 
 	if projectRepo == nil {
-		return nil, "", nil
+		return nil, "", 0, nil
 	}
 
 	// Compute the lock file path relative to the git repository root.
 	lockFileAbsPath, err := lockfile.LockPath(lockDir, componentName)
 	if err != nil {
-		return nil, "", fmt.Errorf("resolving lock file path for %#q:\n%w", componentName, err)
+		return nil, "", 0, fmt.Errorf("resolving lock file path for %#q:\n%w", componentName, err)
 	}
 
 	lockFileRelPath, err := filepath.Rel(projectRepoDir, lockFileAbsPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to compute repo-relative lock path for %#q:\n%w",
+		return nil, "", 0, fmt.Errorf("failed to compute repo-relative lock path for %#q:\n%w",
 			lockFileAbsPath, err)
 	}
 
@@ -490,27 +494,36 @@ func buildSyntheticCommits(
 	// synthetic history is skipped.
 	headLock, err := readLockFileAtHEAD(projectRepo, lockFileRelPath)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 
 	if headLock == nil {
-		return nil, "", nil
+		return nil, "", 0, nil
 	}
 
 	importCommit = headLock.ImportCommit
 
 	fpChanges, err := FindFingerprintChanges(ctx, cmdFactory, projectRepo, projectRepoDir, lockFileRelPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to find fingerprint changes for lock file %#q:\n%w",
+		return nil, "", 0, fmt.Errorf("failed to find fingerprint changes for lock file %#q:\n%w",
 			lockFileRelPath, err)
 	}
+
+	releaseChanges, err := filterFingerprintChangesAfterBaseline(
+		fpChanges, headLock.ReleaseCounterBaseline,
+	)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("applying release counter history baseline for lock file %#q:\n%w",
+			lockFileRelPath, err)
+	}
+	releaseBumpCount = len(releaseChanges)
 
 	// In a shallow clone the commit that added the lock file may have been
 	// pruned. Detect this before falling through to dirty detection.
 	if len(fpChanges) == 0 {
 		shallowCommits, _ := projectRepo.Storer.Shallow()
 		if len(shallowCommits) > 0 {
-			return nil, "", fmt.Errorf(
+			return nil, "", 0, fmt.Errorf(
 				"lock file %#q has no git history; a full clone is required",
 				lockFileRelPath)
 		}
@@ -523,16 +536,34 @@ func buildSyntheticCommits(
 			"lockFile", lockFileRelPath)
 
 		fpChanges = append(fpChanges, *dirty)
+		releaseBumpCount++
 	}
 
 	if len(fpChanges) == 0 {
 		slog.Warn("Lock file has no fingerprint changes; skipping synthetic history",
 			"lockFile", lockFileRelPath)
 
-		return nil, "", nil
+		return nil, "", 0, nil
 	}
 
-	return fpChanges, importCommit, nil
+	return fpChanges, importCommit, releaseBumpCount, nil
+}
+
+func filterFingerprintChangesAfterBaseline(
+	changes []FingerprintChange,
+	baseline string,
+) ([]FingerprintChange, error) {
+	if baseline == "" {
+		return changes, nil
+	}
+
+	for idx := range changes {
+		if changes[idx].InputFingerprint == baseline {
+			return changes[idx+1:], nil
+		}
+	}
+
+	return nil, fmt.Errorf("baseline fingerprint %#q was not found in committed lock history", baseline)
 }
 
 // BuildDirtyChange returns a [FingerprintChange] representing uncommitted
@@ -573,7 +604,8 @@ func BuildDirtyChange(
 			Timestamp:   time.Now().Unix(),
 			Message:     "Local changes (uncommitted)",
 		},
-		UpstreamCommit: currentUpstreamCommit,
+		InputFingerprint: currentFingerprint,
+		UpstreamCommit:   currentUpstreamCommit,
 	}
 }
 

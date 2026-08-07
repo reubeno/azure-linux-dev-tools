@@ -68,6 +68,9 @@ The --bump flag updates matching lock files to increment the manual-rebuild
 counter, triggering a new release. Useful for mass-rebuild scenarios (e.g.,
 toolchain bug, static library update). Orphan pruning is skipped under --bump.
 
+Every selected component with 'release.calculation = "manual"' emits a warning
+because update and --bump do not change that component's Release value.
+
 The --check-only flag runs the full pipeline but does NOT write lock files or
 prune orphans. The command exits 0 when nothing would change and exits 1 when
 any component is stale or any lock would be pruned. Intended for CI gates.
@@ -179,6 +182,8 @@ func UpdateComponents(env *azldev.Env, options *UpdateComponentOptions) ([]Updat
 	if len(comps) == 0 && !options.ComponentFilter.IncludeAllComponents {
 		return nil, errors.New("no components matched the filter")
 	}
+
+	warnManualReleaseComponents(comps)
 
 	// Resolve upstream commits in parallel (no-op for empty list).
 	store := env.LockStore()
@@ -408,6 +413,8 @@ func updateComponentLock(env *azldev.Env, store *lockfile.Store, result *UpdateR
 		return false, fmt.Errorf("no resolved config for %#q; cannot compute fingerprint", result.Component)
 	}
 
+	updateReleaseCounterBaseline(result.config, lock)
+
 	// Resolve per-component distro for ReleaseVer, matching the
 	// per-component resolution used by render/build/prepare-sources.
 	releaseVer, distroErr := resolveReleaseVer(env, result.config)
@@ -458,6 +465,26 @@ func updateComponentLock(env *azldev.Env, store *lockfile.Store, result *UpdateR
 	}
 
 	return true, nil
+}
+
+func updateReleaseCounterBaseline(
+	config *projectconfig.ComponentConfig,
+	lock *lockfile.ComponentLock,
+) {
+	if (config.Release.Calculation == projectconfig.ReleaseCalculationAuto ||
+		config.Release.Calculation == projectconfig.ReleaseCalculationStatic) &&
+		config.Release.Counter != nil {
+		if lock.ReleaseCounterBaseline == "" {
+			lock.ReleaseCounterBaseline = lock.InputFingerprint
+		}
+
+		return
+	}
+
+	if config.Release.Calculation == projectconfig.ReleaseCalculationManual ||
+		config.Release.Calculation == projectconfig.ReleaseCalculationAutorelease {
+		lock.ReleaseCounterBaseline = ""
+	}
 }
 
 // updateResolutionHash computes and stores the resolution input hash for
@@ -521,6 +548,7 @@ func bumpComponents(
 			return results, fmt.Errorf("cannot bump %#q:\n%w", name, lockErr)
 		}
 
+		updateReleaseCounterBaseline(comp.GetConfig(), lock)
 		lock.ManualBump++
 
 		slog.Info("Bumping component", "component", name, "manualBump", lock.ManualBump)
@@ -572,6 +600,19 @@ func bumpComponents(
 	}
 
 	return results, nil
+}
+
+func warnManualReleaseComponents(comps []components.Component) {
+	for _, comp := range comps {
+		if comp.GetConfig().Release.Calculation != projectconfig.ReleaseCalculationManual {
+			continue
+		}
+
+		slog.Warn(
+			"Component uses manual release calculation; azldev will not update its Release value",
+			"component", comp.GetName(),
+		)
+	}
 }
 
 // resolveLockedSourceIdentity returns the source identity to use when

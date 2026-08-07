@@ -514,7 +514,7 @@ func (p *sourcePreparerImpl) trySyntheticHistory(
 		}
 	}
 
-	changes, importCommit, err := buildSyntheticCommits(
+	changes, importCommit, releaseBumpCount, err := buildSyntheticCommits(
 		ctx, p.cmdFactory, config, componentName, p.lockReader.LockDir(),
 		currentFingerprint,
 	)
@@ -529,10 +529,13 @@ func (p *sourcePreparerImpl) trySyntheticHistory(
 		return nil
 	}
 
-	// Adjust the Release tag before staging changes. See [tryBumpStaticRelease]
-	// for the handling of %autorelease, static integers, and non-standard values.
-	if err := p.tryBumpStaticRelease(component, sourcesDirPath, len(changes)); err != nil {
-		return fmt.Errorf("failed to apply release bump:\n%w", err)
+	// Adjust the Release tag only for changes after the component's optional
+	// migration baseline. All changes still participate in synthetic history
+	// so %autochangelog retains the complete package history.
+	if releaseBumpCount > 0 {
+		if err := p.tryBumpStaticRelease(component, sourcesDirPath, releaseBumpCount); err != nil {
+			return fmt.Errorf("failed to apply release bump:\n%w", err)
+		}
 	}
 
 	gitDirPath := filepath.Join(sourcesDirPath, ".git")

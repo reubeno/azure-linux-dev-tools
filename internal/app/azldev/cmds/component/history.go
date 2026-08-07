@@ -256,12 +256,13 @@ type HistoryResult struct {
 //     compile error at the copy site instead of silently emptying the
 //     downstream changelog data.
 type FingerprintChange struct {
-	Hash           string `json:"hash"`
-	Author         string `json:"author"`
-	AuthorEmail    string `json:"authorEmail"`
-	Timestamp      int64  `json:"timestamp"`
-	Message        string `json:"message"`
-	UpstreamCommit string `json:"upstreamCommit,omitempty"`
+	Hash             string `json:"hash"`
+	Author           string `json:"author"`
+	AuthorEmail      string `json:"authorEmail"`
+	Timestamp        int64  `json:"timestamp"`
+	Message          string `json:"message"`
+	InputFingerprint string `json:"inputFingerprint"`
+	UpstreamCommit   string `json:"upstreamCommit,omitempty"`
 }
 
 // ComponentHistory computes the per-component history data for the components

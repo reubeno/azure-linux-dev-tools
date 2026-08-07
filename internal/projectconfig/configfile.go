@@ -90,6 +90,10 @@ func (f ConfigFile) Validate() error {
 		return fmt.Errorf("config file error:\n%w", err)
 	}
 
+	if err := validateReleaseConfigs(f); err != nil {
+		return err
+	}
+
 	// Validate package group configurations.
 	for groupName, group := range f.PackageGroups {
 		if err := group.Validate(); err != nil {
@@ -149,6 +153,42 @@ func (f ConfigFile) Validate() error {
 
 		if err := suite.Validate(); err != nil {
 			return fmt.Errorf("invalid test suite %#q:\n%w", suiteName, err)
+		}
+	}
+
+	return nil
+}
+
+func validateReleaseConfigs(configFile ConfigFile) error {
+	if configFile.DefaultComponentConfig != nil {
+		if err := configFile.DefaultComponentConfig.Release.Validate(); err != nil {
+			return fmt.Errorf("invalid release config in 'default-component-config':\n%w", err)
+		}
+	}
+
+	for groupName, group := range configFile.ComponentGroups {
+		if err := group.DefaultComponentConfig.Release.Validate(); err != nil {
+			return fmt.Errorf(
+				"invalid release config in component group %#q default-component-config:\n%w",
+				groupName, err,
+			)
+		}
+	}
+
+	for distroName, distro := range configFile.Distros {
+		for versionName, version := range distro.Versions {
+			if err := version.DefaultComponentConfig.Release.Validate(); err != nil {
+				return fmt.Errorf(
+					"invalid release config in distro %#q version %#q default-component-config:\n%w",
+					distroName, versionName, err,
+				)
+			}
+		}
+	}
+
+	for componentName, component := range configFile.Components {
+		if err := component.Release.Validate(); err != nil {
+			return fmt.Errorf("invalid release config for component %#q:\n%w", componentName, err)
 		}
 	}
 

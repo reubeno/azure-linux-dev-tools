@@ -112,6 +112,7 @@ func TestSaveAndLoad(t *testing.T) {
 	original.UpstreamCommit = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
 	original.ImportCommit = "0000111122223333444455556666777788889999"
 	original.ManualBump = 2
+	original.ReleaseCounterBaseline = "sha256:baseline"
 	original.InputFingerprint = "sha256:abcdef1234567890"
 
 	require.NoError(t, original.Save(memFS, lockPath))
@@ -123,6 +124,7 @@ func TestSaveAndLoad(t *testing.T) {
 	assert.Equal(t, "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", loaded.UpstreamCommit)
 	assert.Equal(t, "0000111122223333444455556666777788889999", loaded.ImportCommit)
 	assert.Equal(t, 2, loaded.ManualBump)
+	assert.Equal(t, "sha256:baseline", loaded.ReleaseCounterBaseline)
 	assert.Equal(t, "sha256:abcdef1234567890", loaded.InputFingerprint)
 }
 

@@ -385,6 +385,271 @@ func TestReleaseCalculationValidation(t *testing.T) {
 	}))
 }
 
+func TestReleaseConfigValidation(t *testing.T) {
+	t.Run("release tag counter", func(t *testing.T) {
+		config := projectconfig.ReleaseConfig{
+			Calculation: projectconfig.ReleaseCalculationStatic,
+			Counter: &projectconfig.ReleaseCounterConfig{
+				Source: projectconfig.ReleaseCounterSourceReleaseTag,
+				Regex:  `^0\.([0-9]+)(?:\.git.*)$`,
+			},
+		}
+
+		require.NoError(t, config.Validate())
+	})
+
+	t.Run("spec macro counters", func(t *testing.T) {
+		for _, directive := range []projectconfig.ReleaseCounterDirective{
+			projectconfig.ReleaseCounterDirectiveGlobal,
+			projectconfig.ReleaseCounterDirectiveDefine,
+		} {
+			config := projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source:    projectconfig.ReleaseCounterSourceSpecMacro,
+					Directive: directive,
+					Name:      "baserelease",
+				},
+			}
+
+			require.NoError(t, config.Validate())
+		}
+	})
+
+	testCases := []struct {
+		name   string
+		config projectconfig.ReleaseConfig
+	}{
+		{
+			name: "release tag missing regex",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source: projectconfig.ReleaseCounterSourceReleaseTag,
+				},
+			},
+		},
+		{
+			name: "release tag has no capture",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source: projectconfig.ReleaseCounterSourceReleaseTag,
+					Regex:  `^[0-9]+$`,
+				},
+			},
+		},
+		{
+			name: "release tag has multiple captures",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source: projectconfig.ReleaseCounterSourceReleaseTag,
+					Regex:  `^([0-9]+)(.*)$`,
+				},
+			},
+		},
+		{
+			name: "release tag has directive only",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source:    projectconfig.ReleaseCounterSourceReleaseTag,
+					Regex:     `^([0-9]+)$`,
+					Directive: projectconfig.ReleaseCounterDirectiveGlobal,
+				},
+			},
+		},
+		{
+			name: "release tag has name only",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source: projectconfig.ReleaseCounterSourceReleaseTag,
+					Regex:  `^([0-9]+)$`,
+					Name:   "baserelease",
+				},
+			},
+		},
+		{
+			name: "spec macro missing directive",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source: projectconfig.ReleaseCounterSourceSpecMacro,
+					Name:   "baserelease",
+				},
+			},
+		},
+		{
+			name: "spec macro missing name",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source:    projectconfig.ReleaseCounterSourceSpecMacro,
+					Directive: projectconfig.ReleaseCounterDirectiveGlobal,
+				},
+			},
+		},
+		{
+			name: "spec macro name starts with digit",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source:    projectconfig.ReleaseCounterSourceSpecMacro,
+					Directive: projectconfig.ReleaseCounterDirectiveGlobal,
+					Name:      "1release",
+				},
+			},
+		},
+		{
+			name: "spec macro has regex",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationStatic,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source:    projectconfig.ReleaseCounterSourceSpecMacro,
+					Regex:     `^([0-9]+)$`,
+					Directive: projectconfig.ReleaseCounterDirectiveGlobal,
+					Name:      "baserelease",
+				},
+			},
+		},
+		{
+			name: "manual forbids counter",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationManual,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source: projectconfig.ReleaseCounterSourceReleaseTag,
+					Regex:  `^([0-9]+)$`,
+				},
+			},
+		},
+		{
+			name: "autorelease forbids counter",
+			config: projectconfig.ReleaseConfig{
+				Calculation: projectconfig.ReleaseCalculationAutorelease,
+				Counter: &projectconfig.ReleaseCounterConfig{
+					Source: projectconfig.ReleaseCounterSourceReleaseTag,
+					Regex:  `^([0-9]+)$`,
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			require.Error(t, testCase.config.Validate())
+		})
+	}
+}
+
+func TestResolveComponentConfig_ReleaseCounterInheritance(t *testing.T) {
+	defaultCounter := &projectconfig.ReleaseCounterConfig{
+		Source: projectconfig.ReleaseCounterSourceReleaseTag,
+		Regex:  `^([0-9]+)$`,
+	}
+	projectDefaults := projectconfig.ComponentConfig{
+		Release: projectconfig.ReleaseConfig{
+			Calculation: projectconfig.ReleaseCalculationAuto,
+			Counter:     defaultCounter,
+		},
+	}
+
+	t.Run("static inherits default counter", func(t *testing.T) {
+		resolved, err := projectconfig.ResolveComponentConfig(
+			projectconfig.ComponentConfig{
+				Name: "static",
+				Release: projectconfig.ReleaseConfig{
+					Calculation: projectconfig.ReleaseCalculationStatic,
+				},
+			},
+			projectDefaults,
+			projectconfig.ComponentConfig{},
+			nil,
+			nil,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, resolved.Release.Counter)
+		assert.Equal(t, defaultCounter.Regex, resolved.Release.Counter.Regex)
+	})
+
+	t.Run("component counter replaces inherited tagged union", func(t *testing.T) {
+		resolved, err := projectconfig.ResolveComponentConfig(
+			projectconfig.ComponentConfig{
+				Name: "macro",
+				Release: projectconfig.ReleaseConfig{
+					Calculation: projectconfig.ReleaseCalculationStatic,
+					Counter: &projectconfig.ReleaseCounterConfig{
+						Source:    projectconfig.ReleaseCounterSourceSpecMacro,
+						Directive: projectconfig.ReleaseCounterDirectiveDefine,
+						Name:      "baserelease",
+					},
+				},
+			},
+			projectDefaults,
+			projectconfig.ComponentConfig{},
+			nil,
+			nil,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, resolved.Release.Counter)
+		assert.Equal(t, projectconfig.ReleaseCounterSourceSpecMacro, resolved.Release.Counter.Source)
+		assert.Empty(t, resolved.Release.Counter.Regex)
+	})
+
+	t.Run("manual clears inherited counter", func(t *testing.T) {
+		resolved, err := projectconfig.ResolveComponentConfig(
+			projectconfig.ComponentConfig{
+				Name: "manual",
+				Release: projectconfig.ReleaseConfig{
+					Calculation: projectconfig.ReleaseCalculationManual,
+				},
+			},
+			projectDefaults,
+			projectconfig.ComponentConfig{},
+			nil,
+			nil,
+		)
+		require.NoError(t, err)
+		assert.Nil(t, resolved.Release.Counter)
+	})
+
+	t.Run("autorelease clears inherited counter", func(t *testing.T) {
+		resolved, err := projectconfig.ResolveComponentConfig(
+			projectconfig.ComponentConfig{
+				Name: "autorelease",
+				Release: projectconfig.ReleaseConfig{
+					Calculation: projectconfig.ReleaseCalculationAutorelease,
+				},
+			},
+			projectDefaults,
+			projectconfig.ComponentConfig{},
+			nil,
+			nil,
+		)
+		require.NoError(t, err)
+		assert.Nil(t, resolved.Release.Counter)
+	})
+}
+
+func TestProjectConfigValidation_RejectsMergedManualCounter(t *testing.T) {
+	config := projectconfig.NewProjectConfig()
+	config.Components["test"] = projectconfig.ComponentConfig{
+		Release: projectconfig.ReleaseConfig{
+			Calculation: projectconfig.ReleaseCalculationManual,
+			Counter: &projectconfig.ReleaseCounterConfig{
+				Source: projectconfig.ReleaseCounterSourceReleaseTag,
+				Regex:  `^([0-9]+)$`,
+			},
+		},
+	}
+
+	err := config.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "test")
+	assert.Contains(t, err.Error(), "manual")
+}
+
 func TestResolveComponentConfig(t *testing.T) {
 	distroDefaults := projectconfig.ComponentConfig{
 		Spec: projectconfig.SpecSource{

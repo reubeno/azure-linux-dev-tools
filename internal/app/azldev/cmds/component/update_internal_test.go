@@ -4,6 +4,9 @@
 package component
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/components"
@@ -295,6 +298,46 @@ func TestBumpComponents_SequentialBumps(t *testing.T) {
 	assert.NotEqual(t, fp1, lock2.InputFingerprint, "second bump should produce different fingerprint")
 }
 
+func TestUpdateReleaseCounterBaseline(t *testing.T) {
+	staticConfig := baseConfig("static")
+	staticConfig.Release = projectconfig.ReleaseConfig{
+		Calculation: projectconfig.ReleaseCalculationStatic,
+		Counter: &projectconfig.ReleaseCounterConfig{
+			Source: projectconfig.ReleaseCounterSourceReleaseTag,
+			Regex:  `^([0-9]+)$`,
+		},
+	}
+
+	lock := lockfile.New()
+	lock.InputFingerprint = "sha256:manual"
+
+	updateReleaseCounterBaseline(staticConfig, lock)
+	assert.Equal(t, "sha256:manual", lock.ReleaseCounterBaseline)
+
+	autoConfig := baseConfig("auto")
+	autoConfig.Release = projectconfig.ReleaseConfig{
+		Calculation: projectconfig.ReleaseCalculationAuto,
+		Counter: &projectconfig.ReleaseCounterConfig{
+			Source: projectconfig.ReleaseCounterSourceReleaseTag,
+			Regex:  `^([0-9]+)$`,
+		},
+	}
+
+	autoLock := lockfile.New()
+	autoLock.InputFingerprint = "sha256:auto"
+	updateReleaseCounterBaseline(autoConfig, autoLock)
+	assert.Equal(t, "sha256:auto", autoLock.ReleaseCounterBaseline)
+
+	lock.InputFingerprint = "sha256:static"
+	updateReleaseCounterBaseline(staticConfig, lock)
+	assert.Equal(t, "sha256:manual", lock.ReleaseCounterBaseline, "baseline must be write-once")
+
+	manualConfig := baseConfig("manual")
+	manualConfig.Release.Calculation = projectconfig.ReleaseCalculationManual
+	updateReleaseCounterBaseline(manualConfig, lock)
+	assert.Empty(t, lock.ReleaseCounterBaseline)
+}
+
 // Bumping a local component with no lock file should error (same as upstream).
 func TestBumpComponents_ErrorOnLocalNoLock(t *testing.T) {
 	env := testutils.NewTestEnv(t)
@@ -400,6 +443,36 @@ func TestBumpComponents_MixedComponents(t *testing.T) {
 
 	assert.Equal(t, 1, readLock(t, store, "local-pkg").ManualBump)
 	assert.Equal(t, 1, readLock(t, store, "curl").ManualBump)
+}
+
+func TestWarnManualReleaseComponents_WarnsForEveryManualComponent(t *testing.T) {
+	var logBuffer bytes.Buffer
+
+	oldLogger := slog.Default()
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{
+		Level: slog.LevelWarn,
+	})))
+	defer slog.SetDefault(oldLogger)
+
+	manualOne := baseConfig("manual-one")
+	manualOne.Release.Calculation = projectconfig.ReleaseCalculationManual
+	manualTwo := baseConfig("manual-two")
+	manualTwo.Release.Calculation = projectconfig.ReleaseCalculationManual
+	automatic := baseConfig("automatic")
+	automatic.Release.Calculation = projectconfig.ReleaseCalculationAuto
+
+	warnManualReleaseComponents([]components.Component{
+		newMockComp(t, "manual-one", manualOne),
+		newMockComp(t, "automatic", automatic),
+		newMockComp(t, "manual-two", manualTwo),
+	})
+
+	output := logBuffer.String()
+	assert.Equal(t, 2, strings.Count(output, "level=WARN"))
+	assert.Contains(t, output, "component=manual-one")
+	assert.Contains(t, output, "component=manual-two")
+	assert.NotContains(t, output, "component=automatic")
 }
 
 // newMockComp creates a MockComponent with the given name and config using gomock.

@@ -6,14 +6,17 @@ package projectconfig
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 
 	"dario.cat/mergo"
 	"github.com/brunoga/deep"
+	"github.com/invopop/jsonschema"
 	"github.com/microsoft/azure-linux-dev-tools/internal/rpm"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
+	orderedmap "github.com/pb33f/ordered-map/v2"
 )
 
 // ErrUndefinedComponent is returned when a component group references a component name
@@ -268,30 +271,199 @@ type ReleaseCalculation string
 
 const (
 	// ReleaseCalculationAuto is the default. azldev auto-detects whether the spec uses
-	// %autorelease or a static integer release, and handles each accordingly.
+	// %autorelease directly in the main-package Release tag. Otherwise it applies the
+	// configured static counter, or the built-in simple Release-tag counter.
 	ReleaseCalculationAuto ReleaseCalculation = "auto"
 
 	// ReleaseCalculationAutorelease explicitly declares that the spec uses %autorelease.
-	// azldev skips all Release tag manipulation, letting rpmautospec resolve the release
-	// number from git history. Use this for specs with conditional %autorelease/%else
-	// fallbacks that confuse auto-detection.
+	// azldev skips all counter manipulation, letting rpmautospec resolve the release
+	// number from git history. Use this for indirect or conditional %autorelease
+	// expressions that auto-detection cannot recognize.
 	ReleaseCalculationAutorelease ReleaseCalculation = "autorelease"
 
-	// ReleaseCalculationStatic explicitly declares that the spec uses a static
-	// release tag. azldev parses and bumps the release value during rendering.
-	// Use this for specs with conditional Release tags where auto-detection
-	// picks the wrong branch but the static release logic still works correctly.
+	// ReleaseCalculationStatic explicitly declares that azldev owns one integral
+	// release counter. The optional counter config locates complex Release-tag or
+	// spec-macro counters; when omitted, the built-in simple Release-tag counter is used.
 	ReleaseCalculationStatic ReleaseCalculation = "static"
 
-	// ReleaseCalculationManual skips all automatic Release tag manipulation. Use this for
-	// components that manage their own release numbering (e.g. kernel).
+	// ReleaseCalculationManual disables all automatic Release manipulation. Component
+	// update warns whenever it selects a manual component.
 	ReleaseCalculationManual ReleaseCalculation = "manual"
 )
+
+// ReleaseCounterSource identifies where azldev should find an integral release counter.
+type ReleaseCounterSource string
+
+const (
+	// ReleaseCounterSourceReleaseTag selects a counter from the effective Release tag value.
+	ReleaseCounterSourceReleaseTag ReleaseCounterSource = "release-tag"
+
+	// ReleaseCounterSourceSpecMacro selects a bare integral %global or %define macro body.
+	ReleaseCounterSourceSpecMacro ReleaseCounterSource = "spec-macro"
+)
+
+// ReleaseCounterDirective identifies the RPM spec directive used to define a counter macro.
+type ReleaseCounterDirective string
+
+const (
+	// ReleaseCounterDirectiveGlobal selects a %global macro definition.
+	ReleaseCounterDirectiveGlobal ReleaseCounterDirective = "global"
+
+	// ReleaseCounterDirectiveDefine selects a %define macro definition.
+	ReleaseCounterDirectiveDefine ReleaseCounterDirective = "define"
+)
+
+// ReleaseCounterConfig locates the integral value managed by static release calculation.
+type ReleaseCounterConfig struct {
+	// Source identifies whether the counter comes from the Release tag or a spec macro.
+	Source ReleaseCounterSource `toml:"source" json:"source" validate:"required,oneof=release-tag spec-macro" jsonschema:"required,enum=release-tag,enum=spec-macro,title=Counter source,description=Where to locate the integral release counter."`
+
+	// Regex selects the counter from the effective Release tag. The expression must match
+	// the full tag value and contain exactly one capturing group containing ASCII digits.
+	Regex string `toml:"regex,omitempty" json:"regex,omitempty" jsonschema:"minLength=1,title=Counter regex,description=Full-value regular expression with exactly one capturing group containing the integral counter. Required for release-tag counters."`
+
+	// Directive identifies whether a spec macro is declared with %global or %define.
+	Directive ReleaseCounterDirective `toml:"directive,omitempty" json:"directive,omitempty" jsonschema:"enum=global,enum=define,title=Macro directive,description=RPM directive used by the selected spec macro. Required for spec-macro counters."`
+
+	// Name is the name of the selected spec macro.
+	Name string `toml:"name,omitempty" json:"name,omitempty" jsonschema:"pattern=^[A-Za-z_][A-Za-z0-9_]*$,title=Macro name,description=Name of the bare integral spec macro. Required for spec-macro counters."`
+}
+
+// JSONSchemaExtend mirrors source-specific runtime validation in the generated schema.
+func (ReleaseCounterConfig) JSONSchemaExtend(schema *jsonschema.Schema) {
+	schema.OneOf = []*jsonschema.Schema{
+		{
+			Properties: schemaPropertiesWithConst("source", string(ReleaseCounterSourceReleaseTag)),
+			Required:   []string{"regex"},
+			Not: &jsonschema.Schema{AnyOf: []*jsonschema.Schema{
+				{Required: []string{"directive"}},
+				{Required: []string{"name"}},
+			}},
+		},
+		{
+			Properties: schemaPropertiesWithConst("source", string(ReleaseCounterSourceSpecMacro)),
+			Required:   []string{"directive", "name"},
+			Not:        &jsonschema.Schema{Required: []string{"regex"}},
+		},
+	}
+}
+
+func schemaPropertiesWithConst(name string, value any) *orderedmap.OrderedMap[string, *jsonschema.Schema] {
+	properties := orderedmap.New[string, *jsonschema.Schema]()
+	properties.Set(name, &jsonschema.Schema{Const: value})
+
+	return properties
+}
+
+// Validate checks that the release counter has all and only the fields required by its source.
+func (c ReleaseCounterConfig) Validate() error {
+	switch c.Source {
+	case ReleaseCounterSourceReleaseTag:
+		if c.Regex == "" {
+			return errors.New("'release.counter.regex' is required when source is 'release-tag'")
+		}
+
+		if c.Directive != "" || c.Name != "" {
+			return errors.New(
+				"'release.counter.directive' and 'release.counter.name' are only valid when source is 'spec-macro'",
+			)
+		}
+
+		compiled, err := regexp.Compile(c.Regex)
+		if err != nil {
+			return fmt.Errorf("invalid 'release.counter.regex' %#q:\n%w", c.Regex, err)
+		}
+
+		if compiled.NumSubexp() != 1 {
+			return fmt.Errorf(
+				"'release.counter.regex' must contain exactly one capturing group; found %d",
+				compiled.NumSubexp(),
+			)
+		}
+
+		return nil
+
+	case ReleaseCounterSourceSpecMacro:
+		if c.Regex != "" {
+			return errors.New("'release.counter.regex' is only valid when source is 'release-tag'")
+		}
+
+		if c.Name == "" {
+			return errors.New("'release.counter.name' is required when source is 'spec-macro'")
+		}
+
+		if matched, _ := regexp.MatchString(`^[A-Za-z_][A-Za-z0-9_]*$`, c.Name); !matched {
+			return fmt.Errorf("'release.counter.name' %#q is not a valid RPM macro name", c.Name)
+		}
+
+		switch c.Directive {
+		case ReleaseCounterDirectiveGlobal, ReleaseCounterDirectiveDefine:
+			return nil
+		case "":
+			return errors.New("'release.counter.directive' is required when source is 'spec-macro'")
+		default:
+			return fmt.Errorf(
+				"invalid 'release.counter.directive' %#q; expected 'global' or 'define'",
+				c.Directive,
+			)
+		}
+
+	default:
+		return fmt.Errorf(
+			"invalid 'release.counter.source' %#q; expected 'release-tag' or 'spec-macro'",
+			c.Source,
+		)
+	}
+}
 
 // ReleaseConfig holds release-related configuration for a component.
 type ReleaseConfig struct {
 	// Calculation controls how the Release tag is managed during rendering.
-	Calculation ReleaseCalculation `toml:"calculation,omitempty" json:"calculation,omitempty" validate:"omitempty,oneof=auto autorelease static manual" jsonschema:"enum=auto,enum=autorelease,enum=static,enum=manual,default=auto,title=Release calculation,description=Controls how the Release tag is managed during rendering. Empty or omitted means auto."`
+	Calculation ReleaseCalculation `toml:"calculation,omitempty" json:"calculation,omitempty" validate:"omitempty,oneof=auto autorelease static manual" jsonschema:"enum=auto,enum=autorelease,enum=static,enum=manual,default=auto,title=Release calculation,description=Controls how the Release tag is managed during rendering. Auto uses autorelease when directly selected by the Release tag and otherwise uses the configured or built-in static counter. Autorelease delegates to rpmautospec. Static requires a static counter. Manual disables release manipulation."`
+
+	// Counter optionally overrides the built-in static Release counter locator.
+	// It is valid only for auto and static calculation.
+	Counter *ReleaseCounterConfig `toml:"counter,omitempty" json:"counter,omitempty" jsonschema:"title=Release counter,description=Optional integral counter locator used by auto and static release calculation."`
+}
+
+// JSONSchemaExtend prevents counter configuration on calculations that never consume it.
+func (ReleaseConfig) JSONSchemaExtend(schema *jsonschema.Schema) {
+	manualCalculations := orderedmap.New[string, *jsonschema.Schema]()
+	manualCalculations.Set("calculation", &jsonschema.Schema{
+		Enum: []any{
+			string(ReleaseCalculationAutorelease),
+			string(ReleaseCalculationManual),
+		},
+	})
+
+	schema.AllOf = append(schema.AllOf, &jsonschema.Schema{
+		If: &jsonschema.Schema{Required: []string{"counter"}},
+		Then: &jsonschema.Schema{Not: &jsonschema.Schema{
+			Properties: manualCalculations,
+			Required:   []string{"calculation"},
+		}},
+	})
+}
+
+// Validate checks that the release calculation and optional counter are compatible.
+func (c ReleaseConfig) Validate() error {
+	if c.Counter == nil {
+		return nil
+	}
+
+	if c.Calculation == ReleaseCalculationAutorelease ||
+		c.Calculation == ReleaseCalculationManual {
+		return fmt.Errorf(
+			"'release.counter' is not valid when 'release.calculation' is %#q",
+			c.Calculation,
+		)
+	}
+
+	if err := c.Counter.Validate(); err != nil {
+		return fmt.Errorf("invalid release counter configuration:\n%w", err)
+	}
+
+	return nil
 }
 
 // FreshnessStatus indicates whether a component's current config matches
@@ -438,6 +610,13 @@ var AllowedSourceFilesHashTypes = map[fileutils.HashType]bool{
 func (c *ComponentConfig) MergeUpdatesFrom(other *ComponentConfig) error {
 	otherOverlayFiles := slices.Clone(other.OverlayFiles)
 
+	var otherReleaseCounter *ReleaseCounterConfig
+
+	if other.Release.Counter != nil {
+		counterCopy := *other.Release.Counter
+		otherReleaseCounter = &counterCopy
+	}
+
 	err := mergo.Merge(c, other, mergo.WithOverride, mergo.WithAppendSlice)
 	if err != nil {
 		return fmt.Errorf("failed to merge project info:\n%w", err)
@@ -445,6 +624,16 @@ func (c *ComponentConfig) MergeUpdatesFrom(other *ComponentConfig) error {
 
 	if other.OverlayFiles != nil {
 		c.OverlayFiles = otherOverlayFiles
+	}
+
+	if otherReleaseCounter != nil {
+		// Counter locators are tagged unions. Replace the whole inherited value
+		// instead of merging source-specific fields across config layers.
+		c.Release.Counter = otherReleaseCounter
+	} else if other.Release.Calculation == ReleaseCalculationAutorelease ||
+		other.Release.Calculation == ReleaseCalculationManual {
+		// Explicit non-static modes opt out of an inherited auto/static fallback.
+		c.Release.Counter = nil
 	}
 
 	return nil

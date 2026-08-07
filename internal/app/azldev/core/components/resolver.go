@@ -557,6 +557,11 @@ func (r *Resolver) createComponentFromConfig(componentConfig *projectconfig.Comp
 		componentConfig.Release.Calculation = projectconfig.ReleaseCalculationAuto
 	}
 
+	if err := componentConfig.Release.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid release config for component %#q:\n%w",
+			componentConfig.Name, err)
+	}
+
 	// Populate locked state onto the component config. This makes lock data
 	// available to all downstream consumers (render, build, prepare-sources,
 	// diff-sources) without each needing lock-file awareness.

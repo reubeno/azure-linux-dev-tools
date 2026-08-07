@@ -177,17 +177,33 @@ func appendSpecItems(
 	return items
 }
 
-// appendReleaseItems flags non-default release-calculation modes.
+// appendReleaseItems flags non-default release configuration.
 func appendReleaseItems(
 	items []CustomizationItem, release projectconfig.ReleaseConfig,
 ) []CustomizationItem {
-	if release.Calculation == "" || release.Calculation == projectconfig.ReleaseCalculationAuto {
+	if release.Calculation != "" && release.Calculation != projectconfig.ReleaseCalculationAuto {
+		items = append(items, CustomizationItem{
+			Kind:  "release.calculation",
+			Value: string(release.Calculation),
+		})
+	}
+
+	if release.Counter == nil {
 		return items
 	}
 
+	value := string(release.Counter.Source)
+	switch release.Counter.Source {
+	case projectconfig.ReleaseCounterSourceReleaseTag:
+		value = fmt.Sprintf("%s regex=%s", value, release.Counter.Regex)
+	case projectconfig.ReleaseCounterSourceSpecMacro:
+		value = fmt.Sprintf("%s %%%s %s",
+			value, release.Counter.Directive, release.Counter.Name)
+	}
+
 	return append(items, CustomizationItem{
-		Kind:  "release.calculation",
-		Value: string(release.Calculation),
+		Kind:  "release.counter",
+		Value: value,
 	})
 }
 
