@@ -1,6 +1,6 @@
 # RPM Repos & Repo Sets
 
-This page explains how azldev models RPM repositories: where they're defined, how reusable layout templates produce families of related repos, and how distro versions select which repos are exposed to RPM builds (mock) and image builds (kiwi).
+This page explains how azldev models RPM repositories: where they're defined, how reusable layout templates produce families of related repos, how distro versions select build inputs, and how named profiles compare published inventories.
 
 For field-level reference documentation, see:
 
@@ -50,10 +50,14 @@ Sub-repo `kind` is a classification (`binary`, `debug`, or `source`) describing 
 
 Two templates ship out of the box:
 
-- **`azl-standard`** — a "channelized" layout with two channels (`base`, `sdk`) and three kinds of sub-repo per channel: `binary`, `debug`, `source`. This is the layout used by Azure Linux's published trees.
+- **`azl-standard`** — the Azure Linux PMC layout: `base`, `builddeps` (the `rpm-sdk` publish channel), and `microsoft`, each with binary, debuginfo, and SRPM repositories.
 - **`koji-dist-repo`** — Koji dist-repo layout: per-arch binary tree at `<arch>/`, parallel debuginfo tree at `<arch>/debug/`, and a single `src/` tree for SRPMs.
 
 You can define your own templates if your deployment uses a different layout; they're just regular config that any project can author.
+
+Each template row can list `publish-channels`. `azldev repo compare` uses that
+mapping to verify that package placement agrees with the fully resolved component,
+package-group, and package-specific publish policy.
 
 ### `rpm-repo-sets`
 
@@ -94,6 +98,67 @@ Why split RPM-build vs image-build? They have different security envelopes:
 - mock evaluates `gpg-key` URIs *inside* the chroot, so a local file path is invisible. azldev rejects local `gpg-key` values for `rpm-build` repos.
 - kiwi runs on the host, so any URI form works for `image-build`.
 
+### Repository comparisons
+
+`[resources.rpm-repo-comparisons.<name>]` records left/right repo sets,
+architectures, routing validation, and optional latest-only filtering. Run it with:
+
+```sh
+azldev repo compare --comparison azl4-koji-vs-preview
+```
+
+The report is grouped by RPM package name. Each differing package contains its
+complete relevant left and right NEVR inventories, with RPM architectures,
+logical publication channels, and repository-architecture coverage. A compact
+package summary identifies inventory, architecture, content, duplicate
+publication, routing, and `noarch` replication differences.
+
+Inventory summaries are directional. `added-in-right` means that one or more
+NEVR, kind, and RPM-architecture identities exist only on the right;
+`missing-from-right` means that identities from the left are absent on the
+right. A package with changes in both directions carries both statuses. These
+statuses also cover package names that are entirely absent from one side.
+
+Set `ignore-older-added-in-right = true` when historical builds retained on the
+right should not count as additions. A right-only identity is ignored only when
+the left contains the same package name, artifact kind, and RPM architecture at
+a strictly newer EVR. It remains in the displayed right inventory when another
+difference keeps that package in the report. The Koji-versus-PMC profiles use
+this option so older published builds do not obscure packages added to preview.
+
+When publish routing is enabled, every artifact includes its resolved expected
+publish channel. This annotation is also present for an `unrouted` side such as
+Koji, showing where its packages should be published even though placement in
+that source repository is not treated as a routing error.
+
+JSON exposes the canonical nested report, including aggregate package counts and
+the exact repomd snapshots used. Markdown renders an overall summary followed by
+one package heading with left and right inventory tables. Table and CSV output
+contain one summary row per package name with the package statuses and left/right
+NEVRs. Identical package names are omitted.
+
+All repomd files are fetched before primary metadata, and no ambient dnf cache is
+used. If two matching package records use different checksum algorithms, the
+package summary records `content-comparison-skipped` instead of comparing unlike
+digests.
+
+Set `skip-checksum-comparison = true` for comparisons where expected
+transformations change complete-RPM bytes, such as unsigned Koji artifacts versus
+signed PMC artifacts. This disables checksum, size, and cross-architecture
+`noarch` content checks, but retains inventory, duplicate-placement, missing
+`noarch` replica, and publish-routing findings.
+
+Identical `noarch` packages replicated across every architecture repository in the
+same logical sub-repo are expected and are not duplicates. The report does flag a
+`noarch` package missing from an architecture, replicas with different content, or
+the same `noarch` NEVRA published into multiple logical channels.
+
+Comparisons automatically restrict themselves to artifact kinds available on both
+sides. Mark an unrouted set such as a Koji build tag with `unrouted = true`; its
+packages participate in inventory/content comparison, but physical channel routing
+is not checked. `latest-only = true` selects the latest EVR independently on each
+side and within each physical sub-repo, package name, architecture, and kind.
+
 ## Load-time vs use-time
 
 Expansion is deterministic and happens once during `ProjectConfig.Validate()`, after **all** config files (project, user, `--config-file` extras) have been merged. This means:
@@ -108,20 +173,23 @@ Expansion is deterministic and happens once during `ProjectConfig.Validate()`, a
 
 ```toml
 # ─────────────────────────────────────────────────────────────────────────────
-# Layout template: a "channelized" base/sdk × binary/debug/source matrix.
+# Layout template: the base/sdk/microsoft × binary/debug/source PMC matrix.
 # (Already shipped under defaultconfigs/content/defaults.toml as `azl-standard`;
 # reproduced here for clarity. Project files can override it by re-defining the
 # same name.)
 # ─────────────────────────────────────────────────────────────────────────────
 [resources.rpm-repo-set-templates.azl-standard]
-description = "Standard base/sdk x binary/debug/source layout"
+description = "Standard base/sdk/microsoft x binary/debug/source PMC layout"
 subrepos = [
-    { name = "base",       kind = "binary", subpath = "base/$basearch" },
-    { name = "base-debug", kind = "debug",  subpath = "base/debuginfo/$basearch" },
-    { name = "base-src",   kind = "source", subpath = "base/srpms" },
-    { name = "sdk",        kind = "binary", subpath = "sdk/$basearch" },
-    { name = "sdk-debug",  kind = "debug",  subpath = "sdk/debuginfo/$basearch" },
-    { name = "sdk-src",    kind = "source", subpath = "sdk/srpms" },
+    { name = "base",          kind = "binary", subpath = "base/$basearch",                publish-channels = ["rpm-base"] },
+    { name = "base-debug",    kind = "debug",  subpath = "base/debuginfo/$basearch",      publish-channels = ["rpm-base-debuginfo"] },
+    { name = "base-src",      kind = "source", subpath = "base/srpms",                    publish-channels = ["rpm-base-srpm"] },
+    { name = "sdk",           kind = "binary", subpath = "builddeps/$basearch",           publish-channels = ["rpm-sdk"] },
+    { name = "sdk-debug",     kind = "debug",  subpath = "builddeps/debuginfo/$basearch", publish-channels = ["rpm-sdk-debuginfo"] },
+    { name = "sdk-src",       kind = "source", subpath = "builddeps/srpms",               publish-channels = ["rpm-sdk-srpm"] },
+    { name = "microsoft",     kind = "binary", subpath = "microsoft/$basearch",           publish-channels = ["rpm-microsoft"] },
+    { name = "microsoft-debug", kind = "debug", subpath = "microsoft/debuginfo/$basearch", publish-channels = ["rpm-microsoft-debuginfo"] },
+    { name = "microsoft-src", kind = "source", subpath = "microsoft/srpms",               publish-channels = ["rpm-microsoft-srpm"] },
 ]
 
 # A custom layout for a Koji dist-repo (per-arch binary + debug trees plus a

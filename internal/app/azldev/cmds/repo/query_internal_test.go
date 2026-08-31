@@ -165,6 +165,22 @@ func TestBuildDNFArgv_SkipIfUnavailablePerRepo(t *testing.T) {
 	assert.Contains(t, joined, " --setopt=second.skip_if_unavailable=1 ")
 }
 
+func TestBuildDNFArgv_DisableSSLVerifyPerRepo(t *testing.T) {
+	t.Parallel()
+
+	argv := buildDNFArgv(
+		[]repolayout.InputRepo{
+			{RepoID: "insecure", URL: "https://example.com/a", DisableSSLVerify: true},
+			{RepoID: "secure", URL: "https://example.com/b"},
+		},
+		[]string{"repolist"},
+	)
+
+	joined := " " + joinArgs(argv) + " "
+	assert.Contains(t, joined, " --setopt=insecure.sslverify=0 ")
+	assert.NotContains(t, joined, " --setopt=secure.sslverify")
+}
+
 func TestNewQueryCmd_TemplateVersionMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 

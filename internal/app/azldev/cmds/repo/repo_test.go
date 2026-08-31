@@ -36,6 +36,18 @@ func TestNewQueryCmd_FlagsRegistered(t *testing.T) {
 	}
 }
 
+func TestNewCompareCmd_FlagsRegistered(t *testing.T) {
+	t.Parallel()
+
+	cmd := repo.NewCompareCmd()
+	for _, name := range []string{
+		"comparison", "left", "right", "arch", "latest-only", "check-publish-routing",
+		"skip-checksum-comparison", "ignore-older-added-in-right",
+	} {
+		assert.NotNil(t, cmd.Flags().Lookup(name), "expected flag --%s", name)
+	}
+}
+
 func TestNewQueryCmd_OneOfRepoPrefixOrVersionRequired(t *testing.T) {
 	t.Parallel()
 

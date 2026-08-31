@@ -64,12 +64,17 @@ type ProjectConfig struct {
 // Constructs a default (empty) project configuration.
 func NewProjectConfig() ProjectConfig {
 	return ProjectConfig{
-		Project:           ProjectInfo{},
-		ComponentGroups:   make(map[string]ComponentGroupConfig),
-		Components:        make(map[string]ComponentConfig),
-		Images:            make(map[string]ImageConfig),
-		Distros:           make(map[string]DistroDefinition),
-		Resources:         ResourcesConfig{RpmRepos: make(map[string]RpmRepoResource)},
+		Project:         ProjectInfo{},
+		ComponentGroups: make(map[string]ComponentGroupConfig),
+		Components:      make(map[string]ComponentConfig),
+		Images:          make(map[string]ImageConfig),
+		Distros:         make(map[string]DistroDefinition),
+		Resources: ResourcesConfig{
+			RpmRepos:            make(map[string]RpmRepoResource),
+			RpmRepoComparisons:  make(map[string]RpmRepoComparison),
+			RpmRepoSets:         make(map[string]RpmRepoSet),
+			RpmRepoSetTemplates: make(map[string]RpmRepoSetTemplate),
+		},
 		GroupsByComponent: make(map[string][]string),
 		PackageGroups:     make(map[string]PackageGroupConfig),
 		TestSuites:        make(map[string]TestSuiteConfig),
@@ -114,6 +119,10 @@ func (cfg *ProjectConfig) Validate() error {
 	}
 
 	if err := validateRpmRepoSets(cfg.Resources.RpmRepoSets); err != nil {
+		return err
+	}
+
+	if err := validateRpmRepoComparisons(cfg.Resources.RpmRepoComparisons, cfg.Resources.RpmRepoSets); err != nil {
 		return err
 	}
 

@@ -1170,10 +1170,71 @@
           "type": "object",
           "title": "RPM repo sets",
           "description": "Template instantiations that expand to a group of related RPM repos"
+        },
+        "rpm-repo-comparisons": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RpmRepoComparison"
+          },
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+            "description": "Name; projected verbatim into dnf section headers and kiwi --add-repo arguments."
+          },
+          "type": "object",
+          "title": "RPM repo comparisons",
+          "description": "Named repeatable comparisons between RPM repo sets"
         }
       },
       "additionalProperties": false,
       "type": "object"
+    },
+    "RpmRepoComparison": {
+      "properties": {
+        "left": {
+          "type": "string",
+          "title": "Left repo set",
+          "description": "Name of the left rpm-repo-set"
+        },
+        "right": {
+          "type": "string",
+          "title": "Right repo set",
+          "description": "Name of the right rpm-repo-set"
+        },
+        "arches": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Architectures",
+          "description": "Architectures to compare; empty uses the command default"
+        },
+        "latest-only": {
+          "type": "boolean",
+          "title": "Latest only",
+          "description": "Compare only the latest EVR independently in each sub-repo"
+        },
+        "check-publish-routing": {
+          "type": "boolean",
+          "title": "Check publish routing",
+          "description": "Validate physical sub-repo placement against project publish-channel metadata"
+        },
+        "skip-checksum-comparison": {
+          "type": "boolean",
+          "title": "Skip checksum comparison",
+          "description": "Skip checksum and size comparison for matching package identities"
+        },
+        "ignore-older-added-in-right": {
+          "type": "boolean",
+          "title": "Ignore older additions in right",
+          "description": "Ignore right-only package identities older than a matching left package identity"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "left",
+        "right"
+      ]
     },
     "RpmRepoResource": {
       "oneOf": [
@@ -1244,6 +1305,11 @@
           "type": "array",
           "title": "Arches",
           "description": "Restrict to specific target architectures; empty = all"
+        },
+        "disable-ssl-verify": {
+          "type": "boolean",
+          "title": "Disable SSL verification",
+          "description": "Disable TLS certificate verification for this repository"
         }
       },
       "additionalProperties": false,
@@ -1284,6 +1350,11 @@
           "title": "Disable GPG check",
           "description": "Opt out of GPG signature verification for repos in this set"
         },
+        "disable-ssl-verify": {
+          "type": "boolean",
+          "title": "Disable SSL verification",
+          "description": "Disable TLS certificate verification for repos in this set"
+        },
         "arches": {
           "items": {
             "type": "string"
@@ -1299,6 +1370,11 @@
           "type": "array",
           "title": "Sub-repos",
           "description": "Allowlist of template sub-repos to instantiate (default: all)"
+        },
+        "unrouted": {
+          "type": "boolean",
+          "title": "Unrouted",
+          "description": "Treat this set as a union of publish channels during repository comparisons"
         }
       },
       "additionalProperties": false,
@@ -1439,6 +1515,14 @@
           ],
           "title": "Kind",
           "description": "Sub-repo classification; defaults to binary"
+        },
+        "publish-channels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Publish channels",
+          "description": "Publish-channel values routed to this physical sub-repo"
         }
       },
       "additionalProperties": false,

@@ -217,10 +217,11 @@ func TestRpmRepoResource_TOMLFieldNames(t *testing.T) {
 	typ := reflect.TypeOf(RpmRepoResource{})
 
 	cases := map[string]string{
-		"BaseURI":         "base-uri,omitempty",
-		"DisableGPGCheck": "disable-gpg-check,omitempty",
-		"GPGKey":          "gpg-key,omitempty",
-		"Metalink":        "metalink,omitempty",
+		"BaseURI":          "base-uri,omitempty",
+		"DisableGPGCheck":  "disable-gpg-check,omitempty",
+		"DisableSSLVerify": "disable-ssl-verify,omitempty",
+		"GPGKey":           "gpg-key,omitempty",
+		"Metalink":         "metalink,omitempty",
 	}
 
 	for fieldName, wantTag := range cases {
@@ -228,6 +229,36 @@ func TestRpmRepoResource_TOMLFieldNames(t *testing.T) {
 		require.True(t, ok, "missing field %s", fieldName)
 		assert.Equal(t, wantTag, f.Tag.Get("toml"), "field %s", fieldName)
 	}
+}
+
+func TestValidateRpmRepoComparisons(t *testing.T) {
+	t.Parallel()
+
+	sets := map[string]RpmRepoSet{"left": {}, "right": {}}
+	require.NoError(t, validateRpmRepoComparisons(
+		map[string]RpmRepoComparison{"release": {Left: "left", Right: "right"}},
+		sets,
+	))
+
+	err := validateRpmRepoComparisons(
+		map[string]RpmRepoComparison{"release": {Left: "left", Right: "missing"}},
+		sets,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "undefined rpm-repo-set")
+}
+
+func TestValidateRpmRepoSetTemplateRejectsDuplicatePublishChannel(t *testing.T) {
+	t.Parallel()
+
+	err := validateRpmRepoSetTemplate("published", &RpmRepoSetTemplate{
+		Subrepos: []SubrepoSpec{
+			{Name: "base", Subpath: "base", PublishChannels: []string{"rpm-base"}},
+			{Name: "sdk", Subpath: "sdk", PublishChannels: []string{"rpm-base"}},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maps publish channel")
 }
 
 func TestEffectiveRpmRepos_ExpandSets(t *testing.T) {

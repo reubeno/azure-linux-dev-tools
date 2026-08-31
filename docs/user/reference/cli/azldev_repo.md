@@ -37,5 +37,6 @@ under one or more URL prefixes.
 ### SEE ALSO
 
 * [azldev](azldev.md)	 - 🐧 Azure Linux Dev Tool
+* [azldev repo compare](azldev_repo_compare.md)	 - Compare package inventories in two RPM repo sets
 * [azldev repo query](azldev_repo_query.md)	 - Run dnf against auto-discovered RPM repos
 

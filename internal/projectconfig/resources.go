@@ -65,11 +65,16 @@ type ResourcesConfig struct {
 	// time into one or more synthesized [RpmRepoResource] entries; consumers reach the
 	// expanded repos via [ResourcesConfig.EffectiveRpmRepos].
 	RpmRepoSets map[string]RpmRepoSet `toml:"rpm-repo-sets,omitempty" json:"rpmRepoSets,omitempty" jsonschema:"title=RPM repo sets,description=Template instantiations that expand to a group of related RPM repos"`
+
+	// RpmRepoComparisons defines repeatable comparisons between two repo sets.
+	RpmRepoComparisons map[string]RpmRepoComparison `toml:"rpm-repo-comparisons,omitempty" json:"rpmRepoComparisons,omitempty" jsonschema:"title=RPM repo comparisons,description=Named repeatable comparisons between RPM repo sets"`
 }
 
 // IsEmpty reports whether the ResourcesConfig contains no entries.
 func (r *ResourcesConfig) IsEmpty() bool {
-	return r == nil || (len(r.RpmRepos) == 0 && len(r.RpmRepoSetTemplates) == 0 && len(r.RpmRepoSets) == 0)
+	return r == nil ||
+		(len(r.RpmRepos) == 0 && len(r.RpmRepoSetTemplates) == 0 &&
+			len(r.RpmRepoSets) == 0 && len(r.RpmRepoComparisons) == 0)
 }
 
 // JSONSchemaExtend tightens the generated schema for the resources maps so editors
@@ -80,7 +85,7 @@ func (ResourcesConfig) JSONSchemaExtend(schema *jsonschema.Schema) {
 		return
 	}
 
-	for _, key := range []string{"rpm-repos", "rpm-repo-set-templates", "rpm-repo-sets"} {
+	for _, key := range []string{"rpm-repos", "rpm-repo-set-templates", "rpm-repo-sets", "rpm-repo-comparisons"} {
 		prop, ok := schema.Properties.Get(key)
 		if !ok || prop == nil {
 			continue
@@ -127,6 +132,14 @@ func (r *ResourcesConfig) MergeUpdatesFrom(other *ResourcesConfig) {
 
 	for name, set := range other.RpmRepoSets {
 		r.RpmRepoSets[name] = set
+	}
+
+	if len(other.RpmRepoComparisons) > 0 && r.RpmRepoComparisons == nil {
+		r.RpmRepoComparisons = make(map[string]RpmRepoComparison, len(other.RpmRepoComparisons))
+	}
+
+	for name, comparison := range other.RpmRepoComparisons {
+		r.RpmRepoComparisons[name] = comparison
 	}
 }
 
@@ -183,6 +196,10 @@ type RpmRepoResource struct {
 	// Arches optionally restricts the repository to a specific list of target architectures
 	// (e.g., ["x86_64"]). When empty, the repository is available for all architectures.
 	Arches []string `toml:"arches,omitempty" json:"arches,omitempty" jsonschema:"title=Arches,description=Restrict to specific target architectures; empty = all"`
+
+	// DisableSSLVerify disables TLS certificate verification for this repository.
+	// It should only be used for explicitly trusted repositories with broken or private certificates.
+	DisableSSLVerify bool `toml:"disable-ssl-verify,omitempty" json:"disableSslVerify,omitempty" jsonschema:"title=Disable SSL verification,description=Disable TLS certificate verification for this repository"`
 }
 
 // EffectiveType returns the repository type, applying the rpm-md default when [RpmRepoResource.Type]
@@ -620,6 +637,9 @@ type SubrepoSpec struct {
 	// Authors of [RpmRepoSet] entries can filter by kind only indirectly, by
 	// listing specific sub-repo names in `subrepos`.
 	Kind SubrepoKind `toml:"kind,omitempty" json:"kind,omitempty" jsonschema:"title=Kind,description=Sub-repo classification; defaults to binary,enum=binary,enum=debug,enum=source"`
+
+	// PublishChannels lists project publish-channel values routed to this physical sub-repo.
+	PublishChannels []string `toml:"publish-channels,omitempty" json:"publishChannels,omitempty" jsonschema:"title=Publish channels,description=Publish-channel values routed to this physical sub-repo"`
 }
 
 // RpmRepoSetTemplate is a named layout that describes a fixed set of sub-repos
@@ -662,6 +682,9 @@ type RpmRepoSet struct {
 	// this set; same default semantics as [RpmRepoResource.DisableGPGCheck].
 	DisableGPGCheck bool `toml:"disable-gpg-check,omitempty" json:"disableGpgCheck,omitempty" jsonschema:"title=Disable GPG check,description=Opt out of GPG signature verification for repos in this set"`
 
+	// DisableSSLVerify disables TLS certificate verification for every sub-repo in this set.
+	DisableSSLVerify bool `toml:"disable-ssl-verify,omitempty" json:"disableSslVerify,omitempty" jsonschema:"title=Disable SSL verification,description=Disable TLS certificate verification for repos in this set"`
+
 	// Arches optionally restricts every synthesized repo in this set to a
 	// specific list of target architectures. Empty = all.
 	Arches []string `toml:"arches,omitempty" json:"arches,omitempty" jsonschema:"title=Arches,description=Restrict to specific target architectures; empty = all"`
@@ -672,6 +695,37 @@ type RpmRepoSet struct {
 	// instantiated. Listed names must match a sub-repo declared in the
 	// referenced template.
 	Subrepos []string `toml:"subrepos,omitempty" json:"subrepos,omitempty" jsonschema:"title=Sub-repos,description=Allowlist of template sub-repos to instantiate (default: all)"`
+
+	// Unrouted indicates that this repository combines packages from all publish channels.
+	// Comparisons skip physical publish-channel validation for this set.
+	Unrouted bool `toml:"unrouted,omitempty" json:"unrouted,omitempty" jsonschema:"title=Unrouted,description=Treat this set as a union of publish channels during repository comparisons"`
+}
+
+// RpmRepoComparison defines a repeatable comparison between two named [RpmRepoSet] entries.
+type RpmRepoComparison struct {
+	// Left is the repo set shown on the left side of the comparison.
+	Left string `toml:"left" json:"left" jsonschema:"required,title=Left repo set,description=Name of the left rpm-repo-set"`
+
+	// Right is the repo set shown on the right side of the comparison.
+	Right string `toml:"right" json:"right" jsonschema:"required,title=Right repo set,description=Name of the right rpm-repo-set"`
+
+	// Arches is the target architecture list. Empty uses the command default.
+	Arches []string `toml:"arches,omitempty" json:"arches,omitempty" jsonschema:"title=Architectures,description=Architectures to compare; empty uses the command default"`
+
+	// LatestOnly keeps the latest EVR independently within each physical sub-repo,
+	// package name, architecture, and artifact kind.
+	LatestOnly bool `toml:"latest-only,omitempty" json:"latestOnly,omitempty" jsonschema:"title=Latest only,description=Compare only the latest EVR independently in each sub-repo"`
+
+	// CheckPublishRouting validates package placement using project publish-channel metadata.
+	CheckPublishRouting bool `toml:"check-publish-routing,omitempty" json:"checkPublishRouting,omitempty" jsonschema:"title=Check publish routing,description=Validate physical sub-repo placement against project publish-channel metadata"`
+
+	// SkipChecksumComparison disables package checksum and size comparison for matching identities.
+	// Inventory, duplicate-placement, and routing checks remain enabled.
+	SkipChecksumComparison bool `toml:"skip-checksum-comparison,omitempty" json:"skipChecksumComparison,omitempty" jsonschema:"title=Skip checksum comparison,description=Skip checksum and size comparison for matching package identities"`
+
+	// IgnoreOlderAddedInRight suppresses right-only identities whose EVR is strictly
+	// older than a left identity with the same package name, kind, and architecture.
+	IgnoreOlderAddedInRight bool `toml:"ignore-older-added-in-right,omitempty" json:"ignoreOlderAddedInRight,omitempty" jsonschema:"title=Ignore older additions in right,description=Ignore right-only package identities older than a matching left package identity"`
 }
 
 // EffectiveRpmRepos returns the union of explicitly-defined [RpmRepoResource]
@@ -797,12 +851,13 @@ func expandRpmRepoSet(
 		out = append(out, expandedRepo{
 			Name: repoID,
 			Repo: RpmRepoResource{
-				Description:     expandedDescription(set, sub),
-				Type:            RpmRepoTypeRpmMd,
-				BaseURI:         baseURI,
-				DisableGPGCheck: set.DisableGPGCheck,
-				GPGKey:          set.GPGKey,
-				Arches:          append([]string(nil), set.Arches...),
+				Description:      expandedDescription(set, sub),
+				Type:             RpmRepoTypeRpmMd,
+				BaseURI:          baseURI,
+				DisableGPGCheck:  set.DisableGPGCheck,
+				DisableSSLVerify: set.DisableSSLVerify,
+				GPGKey:           set.GPGKey,
+				Arches:           append([]string(nil), set.Arches...),
 			},
 		})
 	}
@@ -950,6 +1005,7 @@ func validateRpmRepoSetTemplate(name string, tmpl *RpmRepoSetTemplate) error {
 	}
 
 	seen := make(map[string]bool, len(tmpl.Subrepos))
+	publishChannels := make(map[string]string)
 
 	for i := range tmpl.Subrepos {
 		sub := &tmpl.Subrepos[i]
@@ -974,6 +1030,24 @@ func validateRpmRepoSetTemplate(name string, tmpl *RpmRepoSetTemplate) error {
 			)
 		}
 
+		for _, channel := range sub.PublishChannels {
+			if channel == "" {
+				return fmt.Errorf(
+					"rpm-repo-set-template %#q sub-repo %#q has an empty `publish-channels` entry",
+					name, sub.Name,
+				)
+			}
+
+			if previous, ok := publishChannels[channel]; ok {
+				return fmt.Errorf(
+					"rpm-repo-set-template %#q maps publish channel %#q to both sub-repos %#q and %#q",
+					name, channel, previous, sub.Name,
+				)
+			}
+
+			publishChannels[channel] = sub.Name
+		}
+
 		if sub.Subpath == "" {
 			return fmt.Errorf(
 				"rpm-repo-set-template %#q sub-repo %#q is missing `subpath`",
@@ -990,6 +1064,40 @@ func validateRpmRepoSetTemplate(name string, tmpl *RpmRepoSetTemplate) error {
 
 		if err := validateNoUnsafeChars("rpm-repo-set-template", "subpath", sub.Name, sub.Subpath); err != nil {
 			return fmt.Errorf("rpm-repo-set-template %#q:\n%w", name, err)
+		}
+	}
+
+	return nil
+}
+
+func validateRpmRepoComparisons(
+	comparisons map[string]RpmRepoComparison,
+	sets map[string]RpmRepoSet,
+) error {
+	for name, comparison := range comparisons {
+		if err := validateRpmRepoName(name); err != nil {
+			return fmt.Errorf("rpm-repo-comparison name:\n%w", err)
+		}
+
+		if comparison.Left == "" || comparison.Right == "" {
+			return fmt.Errorf(
+				"rpm-repo-comparison %#q must set both `left` and `right`", name)
+		}
+
+		if comparison.Left == comparison.Right {
+			return fmt.Errorf(
+				"rpm-repo-comparison %#q must reference different `left` and `right` repo sets", name)
+		}
+
+		for sideName, setName := range map[string]string{
+			"left": comparison.Left, "right": comparison.Right,
+		} {
+			if _, ok := sets[setName]; !ok {
+				return fmt.Errorf(
+					"rpm-repo-comparison %#q `%s` references undefined rpm-repo-set %#q",
+					name, sideName, setName,
+				)
+			}
 		}
 	}
 

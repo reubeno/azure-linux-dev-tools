@@ -400,10 +400,11 @@ func materializeVersionRepos(
 			}
 
 			out = append(out, repolayout.InputRepo{
-				RepoID: versionRepoID(name, arches, arch),
-				URL:    repolayout.SubstituteBasearch(repo.BaseURI, arch),
-				Arch:   arch,
-				GPGKey: gpgKey,
+				RepoID:           versionRepoID(name, arches, arch),
+				URL:              repolayout.SubstituteBasearch(repo.BaseURI, arch),
+				Arch:             arch,
+				GPGKey:           gpgKey,
+				DisableSSLVerify: repo.DisableSSLVerify,
 			})
 		}
 	}
@@ -538,6 +539,10 @@ func buildDNFArgv(repos []repolayout.InputRepo, userArgs []string) []string {
 				"--setopt="+repoID+".gpgkey="+dnfRepo.GPGKey,
 				"--setopt="+repoID+".gpgcheck=1",
 			)
+		}
+
+		if dnfRepo.DisableSSLVerify {
+			argv = append(argv, "--setopt="+repoID+".sslverify=0")
 		}
 	}
 

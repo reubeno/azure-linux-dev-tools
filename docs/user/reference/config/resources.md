@@ -11,6 +11,7 @@ For an end-to-end walkthrough that ties this together with distro versions and b
 | `resources.rpm-repos` | map of [RpmRepoResource](#rpm-repo-resource) | Individually-defined RPM repositories, keyed by name |
 | `resources.rpm-repo-set-templates` | map of [RpmRepoSetTemplate](#rpm-repo-set-template) | Named layout templates that describe a fixed matrix of sub-repos |
 | `resources.rpm-repo-sets` | map of [RpmRepoSet](#rpm-repo-set) | Template instantiations that expand into a group of related repos |
+| `resources.rpm-repo-comparisons` | map of [RpmRepoComparison](#rpm-repo-comparison) | Named repeatable comparisons between repo sets |
 
 Repos defined under `rpm-repos` and repos synthesized by expanding `rpm-repo-sets` share a single namespace. The combined list is what distro version `inputs` (see [Distros — Inputs](distros.md#inputs)) refer to.
 
@@ -27,6 +28,7 @@ Defined under `[resources.rpm-repos.<name>]`. The `<name>` is projected verbatim
 | Disable GPG check | `disable-gpg-check` | bool | Opt out of GPG verification. Default (`false`) means **GPG checking is enabled** — the safe default. |
 | GPG key | `gpg-key` | string | Path or URI to the GPG key. Accepted shapes: an `https` URI, an `http` URI, a `file` URI with absolute path, or a bare path resolved relative to the defining TOML file. Required unless `disable-gpg-check = true`. |
 | Arches | `arches` | list of string | Restrict to specific target architectures (e.g. `["x86_64"]`). Empty = all. |
+| Disable SSL verification | `disable-ssl-verify` | bool | Disable TLS certificate verification for this repository. Use only for an explicitly trusted endpoint with a broken or private certificate. |
 
 ### URI placeholders
 
@@ -51,7 +53,7 @@ A template describes a fixed layout — the set of sub-repos hosted under a comm
 
 Two templates ship out of the box:
 
-- **`azl-standard`** — a "channelized" layout: `base`/`sdk` channels × `binary`/`debug`/`source` kinds.
+- **`azl-standard`** — the PMC layout: `base`, `builddeps` (the `rpm-sdk` channel), and `microsoft`, each with binary, debuginfo, and SRPM repositories.
 - **`koji-dist-repo`** — Koji dist-repo layout: per-arch binary tree at `<arch>/`, parallel debuginfo tree at `<arch>/debug/`, and a single `src/` tree for SRPMs.
 
 Defined under `[resources.rpm-repo-set-templates.<name>]`.
@@ -68,19 +70,23 @@ Defined under `[resources.rpm-repo-set-templates.<name>]`.
 | Name | `name` | string | Stable short identifier; combined with the set's `name-prefix` to form the resulting repo ID. Same grammar as a top-level repo name. |
 | Sub-path | `subpath` | string | Path relative to the set's `base-uri`. May contain `$basearch` (passed through verbatim). |
 | Kind | `kind` | string (`binary` \| `debug` \| `source`) | Classification of what the sub-repo carries: signed binary RPMs (`binary`), debuginfo/debugsource RPMs (`debug`), or SRPMs (`source`). Defaults to `binary`. Diagnostic only today; reserved for future filtering features. |
+| Publish channels | `publish-channels` | list of string | Project publish-channel values routed to this physical sub-repository. Used by `azldev repo compare` to validate placement. |
 
 ### Example
 
 ```toml
 [resources.rpm-repo-set-templates.azl-standard]
-description = "Standard base/sdk x binary/debug/source layout"
+description = "Standard base/sdk/microsoft x binary/debug/source PMC layout"
 subrepos = [
-    { name = "base",       kind = "binary", subpath = "base/$basearch" },
-    { name = "base-debug", kind = "debug",  subpath = "base/debuginfo/$basearch" },
-    { name = "base-src",   kind = "source", subpath = "base/srpms" },
-    { name = "sdk",        kind = "binary", subpath = "sdk/$basearch" },
-    { name = "sdk-debug",  kind = "debug",  subpath = "sdk/debuginfo/$basearch" },
-    { name = "sdk-src",    kind = "source", subpath = "sdk/srpms" },
+    { name = "base",          kind = "binary", subpath = "base/$basearch",                publish-channels = ["rpm-base"] },
+    { name = "base-debug",    kind = "debug",  subpath = "base/debuginfo/$basearch",      publish-channels = ["rpm-base-debuginfo"] },
+    { name = "base-src",      kind = "source", subpath = "base/srpms",                    publish-channels = ["rpm-base-srpm"] },
+    { name = "sdk",           kind = "binary", subpath = "builddeps/$basearch",           publish-channels = ["rpm-sdk"] },
+    { name = "sdk-debug",     kind = "debug",  subpath = "builddeps/debuginfo/$basearch", publish-channels = ["rpm-sdk-debuginfo"] },
+    { name = "sdk-src",       kind = "source", subpath = "builddeps/srpms",               publish-channels = ["rpm-sdk-srpm"] },
+    { name = "microsoft",     kind = "binary", subpath = "microsoft/$basearch",           publish-channels = ["rpm-microsoft"] },
+    { name = "microsoft-debug", kind = "debug", subpath = "microsoft/debuginfo/$basearch", publish-channels = ["rpm-microsoft-debuginfo"] },
+    { name = "microsoft-src", kind = "source", subpath = "microsoft/srpms",               publish-channels = ["rpm-microsoft-srpm"] },
 ]
 ```
 
@@ -98,8 +104,10 @@ Defined under `[resources.rpm-repo-sets.<name>]`.
 | Name prefix | `name-prefix` | string | Prepended to each sub-repo's `name` to form the synthesized repo ID. May be empty. |
 | GPG key | `gpg-key` | string | Shared GPG key for sub-repos in this set; same shape rules as the per-repo `gpg-key` |
 | Disable GPG check | `disable-gpg-check` | bool | Opt out of GPG verification for sub-repos in this set |
+| Disable SSL verification | `disable-ssl-verify` | bool | Disable TLS certificate verification for every sub-repo in this set |
 | Arches | `arches` | list of string | Restrict every synthesized repo in this set to specific architectures |
 | Sub-repos | `subrepos` | list of string | Allowlist of sub-repo names to include from the template. Empty/unset = include all sub-repos. Names must match entries in the referenced template. |
+| Unrouted | `unrouted` | bool | Treat the set as a union of publish channels. Routing validation is skipped for this set, as with a Koji build tag. |
 
 ### Sub-repo selection
 
@@ -129,9 +137,35 @@ subrepos    = ["base", "base-src", "sdk", "sdk-src"]   # binary + sources, no de
 
 This expands into four `RpmRepoResource` entries: `azl4-base`, `azl4-base-src`, `azl4-sdk`, `azl4-sdk-src`.
 
+## RPM Repo Comparison
+
+A named comparison references two repo sets and supplies repeatable defaults for
+`azldev repo compare --comparison <name>`. CLI flags can override the profile.
+
+| Field | TOML Key | Type | Description |
+|---|---|---|---|
+| Left | `left` | string | **Required.** Left `rpm-repo-sets` name |
+| Right | `right` | string | **Required.** Right `rpm-repo-sets` name |
+| Architectures | `arches` | list of string | Architectures to compare; empty uses `x86_64` and `aarch64` |
+| Latest only | `latest-only` | bool | Keep the latest EVR independently per side, physical sub-repo, package name, architecture, and artifact kind |
+| Check publish routing | `check-publish-routing` | bool | Validate physical placement against project component/package publish-channel metadata |
+| Skip checksum comparison | `skip-checksum-comparison` | bool | Skip checksum and size comparison for matching identities while retaining inventory, duplicate-placement, `noarch` completeness, and routing checks |
+| Ignore older additions in right | `ignore-older-added-in-right` | bool | Ignore right-only identities with a strictly older EVR than a left package of the same name, artifact kind, and RPM architecture |
+
+```toml
+[resources.rpm-repo-comparisons.azl4-preview-vs-prod]
+left = "azl4-preview"
+right = "azl4-prod"
+arches = ["x86_64", "aarch64"]
+latest-only = true
+check-publish-routing = true
+skip-checksum-comparison = false
+ignore-older-added-in-right = false
+```
+
 ## Merging across files
 
-Like other top-level maps, `rpm-repos`, `rpm-repo-set-templates`, and `rpm-repo-sets` are merged across config files **by key with wholesale entry replacement**. A duplicate name in a later-loaded file fully replaces the earlier definition (including any zero-value fields). This makes `--config-file` overrides predictable: setting `disable-gpg-check = false` (the zero value) will override an earlier `true`.
+Like other top-level maps, `rpm-repos`, `rpm-repo-set-templates`, `rpm-repo-sets`, and `rpm-repo-comparisons` are merged across config files **by key with wholesale entry replacement**. A duplicate name in a later-loaded file fully replaces the earlier definition (including any zero-value fields). This makes `--config-file` overrides predictable: setting `disable-gpg-check = false` (the zero value) will override an earlier `true`.
 
 ## Related Resources
 

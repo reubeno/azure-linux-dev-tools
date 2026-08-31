@@ -48,6 +48,10 @@ type InputRepo struct {
 	// alongside gpgcheck=1. Only meaningful when the caller resolved this
 	// repo from project config; the prefix-driven path leaves it empty.
 	GPGKey string
+	// DisableSSLVerify disables TLS certificate verification for this repo.
+	DisableSSLVerify bool
+	// PublishChannels lists project publish-channel values routed to this sub-repo.
+	PublishChannels []string
 }
 
 // ResolveTemplate looks up name in the supplied templates map (typically
@@ -86,11 +90,12 @@ func ExpandTemplate(
 			for _, arch := range arches {
 				joined, _ := url.JoinPath(prefix, strings.ReplaceAll(sub.Subpath, basearchPlaceholder, arch))
 				out = append(out, InputRepo{
-					TemplateName: templateName,
-					SubrepoName:  sub.Name,
-					Kind:         kind,
-					Arch:         arch,
-					URL:          joined,
+					TemplateName:    templateName,
+					SubrepoName:     sub.Name,
+					Kind:            kind,
+					Arch:            arch,
+					URL:             joined,
+					PublishChannels: append([]string(nil), sub.PublishChannels...),
 				})
 			}
 
@@ -99,10 +104,11 @@ func ExpandTemplate(
 
 		joined, _ := url.JoinPath(prefix, sub.Subpath)
 		out = append(out, InputRepo{
-			TemplateName: templateName,
-			SubrepoName:  sub.Name,
-			Kind:         kind,
-			URL:          joined,
+			TemplateName:    templateName,
+			SubrepoName:     sub.Name,
+			Kind:            kind,
+			URL:             joined,
+			PublishChannels: append([]string(nil), sub.PublishChannels...),
 		})
 	}
 
