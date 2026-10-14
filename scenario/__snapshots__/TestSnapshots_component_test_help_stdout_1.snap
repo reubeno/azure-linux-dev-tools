@@ -1,0 +1,71 @@
+Run associated LISA, TMT, or pytest tests against a component.
+
+By default, reuse the component's local binary build output, or build it if
+missing. Use --rebuild to force a new build, --artifact-source lkg to test a
+published package set, or --rpm to supply explicit candidate packages. All
+binary subpackages are installed by live-test frameworks unless --rpm narrows
+the set. Conflicting subpackages currently require an explicit selection.
+
+Supporting VM/container images default to named published LKG images in the
+selected distro version. Override independently with --base-image,
+--base-image-path, --base-image-source local, or --rebuild-base-image.
+Local image builds require a project-local image recipe.
+
+TMT supports --execution vm, container, ssh, and host. LISA supports vm;
+pytest runs on the host and receives the artifact input manifest. Unsupported
+combinations fail before execution. Host and SSH tests may modify the target;
+only use disposable or explicitly designated test systems.
+
+Use --test to select tests or groups. All selected tests run by default even
+after a failure; --fail-fast stops starting subsequent tests. Results and native
+logs are retained under the test work directory, with optional aggregated JUnit.
+
+Usage:
+  azldev component test COMPONENT [flags]
+
+Examples:
+  azldev component test curl
+  azldev component test curl --execution container
+  azldev component test curl --rebuild --base-image vm-base
+  azldev component test curl --rpm './out/curl*.rpm' --base-image-path ./base.qcow2
+  azldev component test curl --execution ssh --ssh-host test-vm --ssh-user tester
+
+Flags:
+      --arch string                Target architecture: x86_64 or aarch64 (defaults to host)
+      --artifact-source string     Subject artifact source: local (default; reuse or build), lkg, or path
+      --base-image string          Named supporting image (defaults from test/distro configuration)
+      --base-image-path string     Explicit supporting VM image or OCI archive path
+      --base-image-source string   Supporting image source: lkg (default), local, or path
+      --execution string           Execution strategy: vm, container, ssh, or host (framework default when omitted)
+      --fail-fast                  Stop starting tests after the first failure
+  -h, --help                       help for test
+      --junit-xml string           Write an aggregated JUnit XML report for all selected tests
+      --lisa-dir string            Local LISA framework checkout instead of cloning
+      --plan string                TMT plan override
+      --rebuild                    Rebuild the subject locally instead of reusing existing output
+      --rebuild-base-image         Build the named supporting image locally
+  -r, --rpm strings                Explicit binary RPM paths/globs; overrides the default complete component build
+      --source-dir string          Local test source override instead of cloning (TMT/pytest)
+      --ssh-host string            Existing SSH target hostname (--execution ssh)
+      --ssh-key string             Private key for the existing SSH target
+      --ssh-port int               Existing SSH target port (defaults to 22)
+      --ssh-user string            Existing SSH target username
+  -t, --test strings               Test or test-group name (repeatable; defaults to associated tests)
+      --work-dir string            Root for isolated test runs (defaults to the project work directory)
+
+Global Flags:
+  -y, --accept-all                accept all prompts
+      --color mode                output colorization mode {always, auto, never} (default auto)
+      --concurrency int           base concurrency limit (default: number of logical CPUs; minimum 1)
+      --config-file stringArray   additional TOML config file(s) to merge (may be repeated)
+  -n, --dry-run                   dry run only (do not take action)
+      --network-retries int       maximum number of attempts for network operations (minimum 1) (default 3)
+      --no-default-config         disable default configuration
+  -O, --output-format fmt         output format {csv, json, markdown, table} (default table)
+      --permissive-config         do not fail on unknown fields in TOML config files
+  -C, --project string            path to Azure Linux project
+  -q, --quiet                     only enable minimal output
+      --spec-editor editor        Select the RPM spec editor (legacy or experimental) (default legacy)
+  -v, --verbose                   enable verbose output
+      --without-lockfile          preview: track resolved upstream commits in generated config instead of lock files
+

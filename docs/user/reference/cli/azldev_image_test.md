@@ -6,33 +6,25 @@ Run tests against an Azure Linux image
 
 ### Synopsis
 
-Run tests against an Azure Linux image using test definitions declared in the
-project configuration.
+Run associated LISA, TMT, or pytest tests against an image.
 
-Images reference tests via [images.NAME.tests.tests] entries, which resolve to
-project-level [tests.X] definitions or named [test-groups].
+By default, reuse a local build of the image, or build it if missing. Artifact
+age is reported without claiming freshness. Use --rebuild to force a local
+build, --artifact-source lkg to fetch the distro version's published image,
+or --image-path to use an explicit artifact.
 
-By default, all tests associated with the named image are run. Use
---test-suite to select specific test names or test-group names (may be repeated).
+Tests and groups are declared in [tests] and [test-groups] and referenced by
+[images.NAME.tests]. Use --test to select explicit test/group names. The shared
+runner selects an image format compatible with every selected test.
 
-The image artifact can be specified explicitly with --image-path, or resolved
-automatically from the image name in the output directory.
+LISA runs live VM tests. TMT supports VM and container image tests. Pytest
+runs on the host and can inspect the image via {image-path} or the artifact
+manifest exposed through AZLDEV_TEST_INPUTS and {inputs-path}. The host running
+the framework is distinct from the environment under test.
 
-For pytest tests, azldev creates a Python virtual environment, installs
-dependencies from pyproject.toml in the working directory, and runs pytest
-with the configured test paths and extra arguments. Use {image-path} in
-extra-args to insert the image path. Glob patterns (including **) in
-test-paths are expanded automatically.
-
-For LISA tests, the test runner executes on the host and boots the image in a
-QEMU VM. azldev clones the LISA framework, generates a runbook from the test's
-configured criteria, and runs it against the image. azldev generates an
-ephemeral SSH key pair to access the booted VM and removes it once the test
-finishes. [tests.X] LISA definitions require a [tests.X.lisa.source] (git-url,
-ref) to run locally; without one, the test is metadata-only and must be run
-through the LISA infrastructure. Use --lisa-dir to run against an already-cloned
-LISA checkout instead of cloning; this also allows running LISA tests that have
-no [tests.X.lisa.source] configured.
+All selected tests run by default; --fail-fast stops after a failure.
+Native reports and structured results are retained in isolated run directories.
+--junit-xml writes an aggregated report without overwriting individual suites.
 
 ```
 azldev image test IMAGE_NAME [flags]
@@ -41,30 +33,33 @@ azldev image test IMAGE_NAME [flags]
 ### Examples
 
 ```
-  # Run all tests for an image (artifact auto-resolved from output dir)
   azldev image test vm-base
-
-  # Run all test suites with an explicit image path
-  azldev image test vm-base --image-path ./out/images/vm-base/image.raw
-
-	# Run a specific test
-	azldev image test vm-base --test-suite static-image-checks
-
-	# Run multiple tests or a test-group
-	azldev image test vm-base --test-suite static-image-checks --test-suite vm-base-functional
-
-  # Generate JUnit XML output
-  azldev image test vm-base --junit-xml results.xml
+  azldev image test vm-base --rebuild
+  azldev image test vm-base --artifact-source lkg
+  azldev image test vm-base --image-path ./out/image.qcow2 --test smoke
+  azldev image test container-base --execution container
 ```
 
 ### Options
 
 ```
-  -h, --help                 help for test
-  -i, --image-path string    Path to the disk image file (resolved from image name if not specified)
-      --junit-xml string     Path for writing JUnit XML output
-      --lisa-dir string      Path to an already-cloned LISA framework checkout to run against, instead of cloning the framework's configured git source
-      --test-suite strings   Name of a test or test-group to run (may be repeated; defaults to all tests for the image)
+      --arch string              Target architecture: x86_64 or aarch64 (defaults to host)
+      --artifact-source string   Subject artifact source: local (default; reuse or build), lkg, or path
+      --execution string         Execution strategy: vm, container, ssh, or host (framework default when omitted)
+      --fail-fast                Stop starting tests after the first failure
+  -h, --help                     help for test
+  -i, --image-path string        Explicit image under test; overrides local build selection
+      --junit-xml string         Write an aggregated JUnit XML report for all selected tests
+      --lisa-dir string          Local LISA framework checkout instead of cloning
+      --plan string              TMT plan override
+      --rebuild                  Rebuild the subject locally instead of reusing existing output
+      --source-dir string        Local test source override instead of cloning (TMT/pytest)
+      --ssh-host string          Existing SSH target hostname (--execution ssh)
+      --ssh-key string           Private key for the existing SSH target
+      --ssh-port int             Existing SSH target port (defaults to 22)
+      --ssh-user string          Existing SSH target username
+  -t, --test strings             Test or test-group name (repeatable; defaults to associated tests)
+      --work-dir string          Root for isolated test runs (defaults to the project work directory)
 ```
 
 ### Options inherited from parent commands

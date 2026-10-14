@@ -57,6 +57,57 @@ Each distro can define multiple versions under `[distros.<name>.versions.<versio
 | Mock config (aarch64) | `mock-config-aarch64` | string | No | Path to the aarch64-specific mock config file |
 | KIWI config override | `kiwi-config-override` | string | No | Path to KIWI configuration overrides for image builds using this version |
 | Inputs | `inputs` | [DistroVersionInputs](#inputs) | No | Per-use-case input RPM repositories for this version |
+| Published images | `images` | map | No | Named published image artifacts, indexed by architecture; independent of local build recipes |
+| Test base images | `test-base-images` | map | No | Default supporting image names for `vm` and `container` execution |
+| Published test packages | `test-packages` | map | No | Complete published component binary package sets, indexed by architecture |
+
+### Published test artifacts
+
+`component test` and `image test` default to local artifacts for the subject
+under test, but component VM/container tests default to published LKG supporting
+images. The selected project distro version defines these published locations;
+an upstream source distro such as Fedora is not implicitly used as the test OS.
+
+```toml
+[distros.azurelinux.versions.'4.0'.test-base-images]
+vm = "vm-base"
+container = "container-base"
+
+[distros.azurelinux.versions.'4.0'.images.vm-base.architectures]
+x86_64 = [{ format = "qcow2", uri = "https://example.test/4.0/lkg/x86_64/vm-base.qcow2" }]
+aarch64 = [{ format = "qcow2", uri = "https://example.test/4.0/lkg/aarch64/vm-base.qcow2" }]
+
+[distros.azurelinux.versions.'4.0'.images.container-base.architectures]
+x86_64 = [{ format = "oci", uri = "docker://registry.example.test/azurelinux/base:4.0" }]
+aarch64 = [{ format = "oci", uri = "docker://registry.example.test/azurelinux/base:4.0" }]
+
+[distros.azurelinux.versions.'4.0'.test-packages.curl.architectures]
+x86_64 = [
+  { uri = "https://example.test/builds/123/curl-1-1.x86_64.rpm" },
+  { uri = "https://example.test/builds/123/libcurl-1-1.x86_64.rpm" },
+]
+```
+
+These are illustrative locations; publishers must supply actual URLs. The tool
+does not assume an Azure account, storage endpoint, or cloud QA service.
+
+Each architecture contains an array of image variants, with at most one entry
+per format (`qcow2`, `raw`, `vhd`, `vhdx`, or `oci`). A location is an HTTP(S)
+download URL, or a `docker://` registry reference for OCI images. Download
+entries may include `sha256` to verify and safely reuse cached bytes. Unpinned
+download URLs are refreshed when resolved; downloaded content digests and OCI
+image identities are recorded with the run. Download time is not build time.
+Pin registry references with `@sha256:...` when immutable inputs are needed.
+
+Published package lists must describe the complete intended binary output set
+of one component build, including subpackages. This avoids independently
+selecting unrelated package versions. They are used only for explicit
+`--artifact-source lkg` component tests.
+
+Published base images do not require `[images.NAME]` in the consuming project.
+Building them locally does require a project-local recipe; the tool does not
+implicitly clone another project to obtain one. No image-class or additional
+capability metadata is required by this catalog.
 
 ### Default Component Config
 

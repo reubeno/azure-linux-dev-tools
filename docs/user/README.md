@@ -6,6 +6,7 @@
 - [Add a Component](./how-to/add-component.md) — import or create a new package
 - [Build a Component](./how-to/build-component.md) — build RPMs from component definitions
 - [Build an Image](./how-to/build-image.md) — build and boot Azure Linux images
+- [Test Build Artifacts](./how-to/test-build-artifacts.md) — select inputs and run LISA, TMT, or pytest tests
 - [Set Up AI Coding Agents](./how-to/set-up-ai-agents.md) — emit agent skill and instruction files
 - [Preview the Lock-File-Free Mode](./how-to/preview-without-lockfile.md) — opt in to `--without-lockfile`
 
@@ -27,6 +28,7 @@
 - [Overlays](./reference/config/overlays.md) — spec and file overlays for modifying upstream sources
 - [Component Groups](./reference/config/component-groups.md) — grouping components with shared defaults
 - [Images](./reference/config/images.md) — image definitions (VMs, containers)
+- [Tests and Test Groups](./reference/config/tests.md) — framework definitions and shared execution defaults
 - [Tools](./reference/config/tools.md) — external tool configuration
 
 ### CLI Commands

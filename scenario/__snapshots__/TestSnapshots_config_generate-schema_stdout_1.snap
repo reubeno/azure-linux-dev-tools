@@ -636,6 +636,30 @@
           "$ref": "#/$defs/DistroVersionInputs",
           "title": "Inputs",
           "description": "Per-use-case input repositories"
+        },
+        "images": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PublishedImage"
+          },
+          "type": "object",
+          "title": "Published images",
+          "description": "Named published images indexed by architecture"
+        },
+        "test-base-images": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object",
+          "title": "Test base images",
+          "description": "Default named base images by execution strategy (vm or container)"
+        },
+        "test-packages": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PublishedPackages"
+          },
+          "type": "object",
+          "title": "Published test packages",
+          "description": "Complete LKG binary package sets indexed by component and architecture"
         }
       },
       "additionalProperties": false,
@@ -1069,6 +1093,96 @@
       },
       "additionalProperties": false,
       "type": "object"
+    },
+    "PublishedImage": {
+      "properties": {
+        "architectures": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/PublishedImageArtifact"
+            },
+            "type": "array"
+          },
+          "type": "object",
+          "title": "Architecture variants",
+          "description": "Image artifacts by target architecture"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "architectures"
+      ]
+    },
+    "PublishedImageArtifact": {
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": [
+            "qcow2",
+            "raw",
+            "vhd",
+            "vhdx",
+            "oci"
+          ],
+          "title": "Format"
+        },
+        "uri": {
+          "type": "string",
+          "title": "Location",
+          "description": "HTTP(S) disk/archive URL or docker:// OCI registry reference"
+        },
+        "sha256": {
+          "type": "string",
+          "title": "SHA-256",
+          "description": "Optional expected download digest"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "format",
+        "uri"
+      ]
+    },
+    "PublishedPackageArtifact": {
+      "properties": {
+        "uri": {
+          "type": "string",
+          "title": "RPM location",
+          "description": "HTTP(S) URL of a binary RPM"
+        },
+        "sha256": {
+          "type": "string",
+          "title": "SHA-256",
+          "description": "Optional expected download digest"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "uri"
+      ]
+    },
+    "PublishedPackages": {
+      "properties": {
+        "architectures": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/PublishedPackageArtifact"
+            },
+            "type": "array"
+          },
+          "type": "object",
+          "title": "Architecture variants",
+          "description": "Complete binary package set by target architecture"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "architectures"
+      ]
     },
     "ReleaseConfig": {
       "properties": {
@@ -1577,6 +1691,11 @@
           "title": "Required capabilities",
           "description": "Capability tokens the image must declare"
         },
+        "execution": {
+          "$ref": "#/$defs/TestExecutionConfig",
+          "title": "Execution defaults",
+          "description": "Local test strategy and named supporting image defaults"
+        },
         "lisa": {
           "type": "object",
           "title": "LISA config",
@@ -1598,6 +1717,31 @@
       "required": [
         "type"
       ]
+    },
+    "TestExecutionConfig": {
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "vm",
+            "container",
+            "ssh",
+            "host"
+          ],
+          "title": "Strategy",
+          "description": "Default local test execution strategy"
+        },
+        "base-images": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object",
+          "title": "Base images",
+          "description": "Named supporting image for each execution strategy (vm or container)"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "TestGroup": {
       "properties": {

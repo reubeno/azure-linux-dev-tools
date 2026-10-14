@@ -111,18 +111,28 @@ used to build the VM — is resolved per-plan.
 Pass `--plan` to pin a specific plan at the CLI, overriding a catalog entry's
 `plan` when both are given.
 
+Both [`azldev component test`](../reference/cli/azldev_component_test.md) and
+[`azldev image test`](../reference/cli/azldev_image_test.md) use the shared TMT
+adapter. Component tests default to reusing local candidate RPMs (building when
+missing) and fetching a named LKG supporting image from distro-version
+configuration. Image tests default to a local image and do not inject an RPM
+installation step. Each input source can be overridden independently; see
+[Test build artifacts](../how-to/test-build-artifacts.md).
+
 At runtime [`azldev component test`](../reference/cli/azldev_component_test.md)
 either clones `source@ref`, or (with `--source-dir`) runs straight from a local
 fmf tree instead — the output of either `azldev component render` (with
 `render.skip-file-filter = true`) or `azldev component prepare-sources`. Either
-way, it provisions the supplied image with TMT's virtual (QEMU/testcloud) or
-local provisioner, installs the candidate RPMs passed via `--rpm`, and executes
+way, it uses TMT's VM, container, existing SSH, or host provisioner, installs
+the selected candidate RPMs, and executes
 the selected plan(s). **The plan's own `discover` step then decides where the
 tests come from** — azldev does not model that; it only pins (or locally
 materializes) the plan's repo.
 
 ### Candidate RPMs: `--rpm` (loose files) vs. build repos
 
+By default, component tests install all binary subpackages from the selected
+build. **TODO:** conflict-aware subpackage selection remains deferred.
 `azldev component test --rpm` installs **exactly** the RPM files you pass, as
 mandatory targets (`dnf install ./a.rpm ./b.rpm …`). If two of them conflict —
 e.g. `systemd` vs `systemd-standalone-*` — the transaction fails, so you must

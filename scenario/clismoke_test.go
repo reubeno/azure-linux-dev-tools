@@ -32,6 +32,8 @@ func TestSnapshots(t *testing.T) {
 		"--help with color":      cmdtest.NewScenarioTest("--help", "--color=always").Locally(),
 		"--bogus-flag":           cmdtest.NewScenarioTest("--bogus-flag").Locally(),
 		"no-config fix hint":     cmdtest.NewScenarioTest("component", "list", "--all-components").Locally(),
+		"component test help":    cmdtest.NewScenarioTest("component", "test", "--help").Locally(),
+		"image test help":        cmdtest.NewScenarioTest("image", "test", "--help").Locally(),
 	}
 
 	for name, test := range tests {

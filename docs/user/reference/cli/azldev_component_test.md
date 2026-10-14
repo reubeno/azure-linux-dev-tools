@@ -2,63 +2,31 @@
 
 ## azldev component test
 
-Run a component's TMT tests in a local QEMU VM
+Run tests against a component's build artifacts
 
 ### Synopsis
 
-Run TMT test definitions associated with a component against an Azure Linux
-image using TMT's virtual provisioner (QEMU/testcloud).
+Run associated LISA, TMT, or pytest tests against a component.
 
-The image must be a local qcow2 file. Every RPM supplied with --rpm is copied
-into the guest and installed by TMT before the selected plan executes. This
-ensures the test validates the locally built package rather than the version
-already present in the image. The guest can be modified by test preparation and
-execution; a disposable testcloud overlay is used for the virtual disk.
+By default, reuse the component's local binary build output, or build it if
+missing. Use --rebuild to force a new build, --artifact-source lkg to test a
+published package set, or --rpm to supply explicit candidate packages. All
+binary subpackages are installed by live-test frameworks unless --rpm narrows
+the set. Conflicting subpackages currently require an explicit selection.
 
-REQUIRED RPMs:
-  After building a component with 'azldev component build COMPONENT', built RPMs
-  are typically located in base/out/rpms/rpm-base/. You must pass at minimum:
-  - The main package (e.g., buildah-1.0.0-1.x86_64.rpm)
-  - The -tests package (e.g., buildah-tests-1.0.0-1.x86_64.rpm)
+Supporting VM/container images default to named published LKG images in the
+selected distro version. Override independently with --base-image,
+--base-image-path, --base-image-source local, or --rebuild-base-image.
+Local image builds require a project-local image recipe.
 
-  To discover what was built:
-    ls base/out/rpms/rpm-base/<component>*
+TMT supports --execution vm, container, ssh, and host. LISA supports vm;
+pytest runs on the host and receives the artifact input manifest. Unsupported
+combinations fail before execution. Host and SSH tests may modify the target;
+only use disposable or explicitly designated test systems.
 
-  Then pass each relevant RPM with a separate --rpm flag.
-
-PROVISIONER MODES:
-  - virtual (default): Runs tests in a QEMU/testcloud VM using the Azure Linux
-                       image. Most flexible; guest is isolated. Requires --image-path.
-                       Requires an explicit plan (tmt.plan or --plan): hardware
-                       constraints are resolved per-plan.
-  - local: Runs tests directly on this machine. Host must be Azure Linux 4.
-           Useful for quick testing; modifies host state.
-
-PLAN SELECTION:
-  By default tmt discovers and runs every enabled plan it finds in the test
-  source (mirrors Fedora Testing Farm's own default of no pinned plan name).
-  Set 'tmt.plan' in the catalog entry, or pass --plan, to run one specific
-  plan instead. --plan always takes precedence over a catalog entry's
-  'tmt.plan' when both are given.
-
-AZURE LINUX 4 PREREQUISITES:
-  To run with --provision local, install the host dependencies:
-    sudo tdnf install -y python3 python3-pip git sudo
-
-  ('git' is only needed for azldev's own clone path; omit it when using
-  '--source-dir' to skip that clone. The selected plan's own 'discover' step may
-  still invoke git itself, e.g. via an fmf 'discover.url' pointing at another
-  repo, independent of this prerequisite.)
-
-  azldev creates a per-work-directory Python environment and installs the
-  pinned TMT version there. The local provisioner uses sudo to install the
-  supplied candidate RPMs and execute the plan, so it modifies the host.
-
-azldev creates or reuses an isolated Python environment under --work-dir and
-installs TMT with virtual-provisioner support there. python3 must be available
-on the host; git is required for azldev's own catalog clone unless
-'--source-dir' is used, though the selected plan's 'discover' step may still
-invoke git itself regardless of '--source-dir'.
+Use --test to select tests or groups. All selected tests run by default even
+after a failure; --fail-fast stops starting subsequent tests. Results and native
+logs are retained under the test work directory, with optional aggregated JUnit.
 
 ```
 azldev component test COMPONENT [flags]
@@ -67,30 +35,37 @@ azldev component test COMPONENT [flags]
 ### Examples
 
 ```
-  # Build the component first
-  azldev component build buildah
-
-  # Discover available RPMs
-  ls base/out/rpms/rpm-base/buildah*
-
-  # Run tests with discovered RPMs
-  azldev component test buildah \
-    --image-path ./base/out/images/vm-base/azl4-vm-base.x86_64.qcow2 \
-    --rpm ./base/out/rpms/rpm-base/buildah-1.29.0-5.x86_64.rpm \
-    --rpm ./base/out/rpms/rpm-base/buildah-tests-1.29.0-5.x86_64.rpm
+  azldev component test curl
+  azldev component test curl --execution container
+  azldev component test curl --rebuild --base-image vm-base
+  azldev component test curl --rpm './out/curl*.rpm' --base-image-path ./base.qcow2
+  azldev component test curl --execution ssh --ssh-host test-vm --ssh-user tester
 ```
 
 ### Options
 
 ```
-  -h, --help                help for test
-  -i, --image-path string   Path to the qcow2 image under test
-      --plan string         Absolute fmf plan name to run, overriding the catalog entry's 'tmt.plan'. Defaults to running every enabled plan tmt discovers in the test source. Required with '--provision virtual', since hardware export is resolved per-plan.
-      --provision string    TMT provisioner mode: 'virtual' (default) runs tests in QEMU; 'local' runs on this machine (must be Azure Linux 4) (default "virtual")
-  -r, --rpm strings         Local RPM to install before testing (required; may be repeated). Typically include the main package and -tests package.
-      --source-dir string   Run tmt straight from this local fmf tree instead of cloning the catalog 'source'. Accepts the output of either 'azldev component render' (with 'render.skip-file-filter = true') or 'azldev component prepare-sources'. Local inner-loop convenience; not used by cloud (TEE) runs.
-  -t, --test strings        Mapped TMT test name to run (may be repeated; defaults to all)
-      --work-dir string     Directory for cloned metadata and TMT artifacts (default: current directory)
+      --arch string                Target architecture: x86_64 or aarch64 (defaults to host)
+      --artifact-source string     Subject artifact source: local (default; reuse or build), lkg, or path
+      --base-image string          Named supporting image (defaults from test/distro configuration)
+      --base-image-path string     Explicit supporting VM image or OCI archive path
+      --base-image-source string   Supporting image source: lkg (default), local, or path
+      --execution string           Execution strategy: vm, container, ssh, or host (framework default when omitted)
+      --fail-fast                  Stop starting tests after the first failure
+  -h, --help                       help for test
+      --junit-xml string           Write an aggregated JUnit XML report for all selected tests
+      --lisa-dir string            Local LISA framework checkout instead of cloning
+      --plan string                TMT plan override
+      --rebuild                    Rebuild the subject locally instead of reusing existing output
+      --rebuild-base-image         Build the named supporting image locally
+  -r, --rpm strings                Explicit binary RPM paths/globs; overrides the default complete component build
+      --source-dir string          Local test source override instead of cloning (TMT/pytest)
+      --ssh-host string            Existing SSH target hostname (--execution ssh)
+      --ssh-key string             Private key for the existing SSH target
+      --ssh-port int               Existing SSH target port (defaults to 22)
+      --ssh-user string            Existing SSH target username
+  -t, --test strings               Test or test-group name (repeatable; defaults to associated tests)
+      --work-dir string            Root for isolated test runs (defaults to the project work directory)
 ```
 
 ### Options inherited from parent commands

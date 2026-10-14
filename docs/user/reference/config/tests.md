@@ -23,6 +23,7 @@ can evolve independently.
 | Long running | `long-running` | boolean | No | Hints that this test may run for hours |
 | Metrics enabled | `metrics-enabled` | boolean | No | Hints to the test execution environment/validation service whether metrics from this test should be collected and stored |
 | Required capabilities | `required-capabilities` | string array | No | Capability tokens the image must declare for this test to be applicable |
+| Execution | `execution` | table | No | Optional framework-independent strategy and named supporting image defaults |
 | Lisa | `lisa` | table | When `type = "lisa"` | LISA-specific configuration (see [LISA fields](#lisa-fields)) |
 | Tmt | `tmt` | table | When `type = "tmt"` | TMT plan configuration (see [TMT fields](#tmt-fields)) |
 | Pytest | `pytest` | table | When `type = "pytest"` | pytest-specific configuration (see [Pytest fields](#pytest-fields)) |
@@ -30,12 +31,41 @@ can evolve independently.
 Exactly one framework subtable must be present, and it must match `type`; the
 other two must be absent (the loader rejects a missing or mismatched subtable).
 
+### Execution defaults
+
+Both test commands use the same framework adapters. CLI options override these
+optional defaults; existing TOML files need no migration.
+
+```toml
+[tests.example.execution]
+strategy = "vm"
+base-images = { vm = "vm-base", container = "container-base" }
+```
+
+`strategy` is `vm`, `container`, `ssh`, or `host`. When omitted, LISA and TMT
+default to VM, and pytest to host-side inspection. Not every framework supports
+every strategy: unsupported combinations are errors, not silently skipped tests.
+TMT supports all four for components, but an image test cannot use an existing
+SSH target or host in place of actually consuming its subject image.
+
+`base-images` maps `vm`/`container` to specific named images in the selected
+distro version's [published image catalog](distros.md#published-test-artifacts).
+It applies only when a component test requires a supporting image; image tests
+use the image under test. CLI `--base-image` overrides the test mapping, which
+overrides the distro version's `test-base-images` defaults.
+
+Existing scheduling metadata (`required-capabilities`, `long-running`, and
+`metrics-enabled`) is preserved for external orchestration. The local executor
+checks concrete framework, strategy, architecture, and artifact-format support;
+it does not add a new image-capability policy or infer capabilities from an
+uninspected image.
+
 ### LISA Fields
 
 The `[tests.<name>.lisa]` subtable is mostly opaque to azldev, but it
 recognizes a few keys used to select LISA test cases and, optionally, to
 run the test locally via `azldev image test` (booting the image in a QEMU
-VM).
+VM). It can also run against component packages installed into a supporting VM.
 
 | Field | TOML Key | Type | Description |
 |-------|----------|------|-------------|
@@ -53,16 +83,16 @@ required.
 
 ### TMT Fields
 
-The `[tests.<name>.tmt]` subtable identifies an upstream TMT plan. It is also
-used by [`azldev component test`](../cli/azldev_component_test.md) to run the
-mapped plan locally in a QEMU VM. Local execution clones the source at the
-configured commit, provisions the supplied image with TMT/testcloud, and
-installs the RPMs passed through `--rpm` before the plan runs.
+The `[tests.<name>.tmt]` subtable identifies an upstream TMT plan. Both test
+commands run it using the shared TMT adapter. The adapter materializes the
+pinned plan repository, selects the requested native provisioner, and installs
+candidate RPMs for component tests. Image tests do not inject a candidate RPM
+prepare step. TMT retains control of discovery, execution, reporting, and finish.
 
 | Field | TOML Key | Type | Description |
 |-------|----------|------|-------------|
 | Source | `source` | table (`git-url`, `ref`) | Git repository containing the plan. Optional; when omitted, the test source must instead be supplied directly with `--source-dir`. When present, `ref` must be a full 40-character hex commit SHA. |
-| Plan | `plan` | string | Absolute TMT plan name to run. Optional; when omitted, tmt discovers and runs every enabled plan it finds (see [TMT Tests & fmf Metadata](../../explanation/tmt-tests.md)). `--provision virtual` always requires an explicit plan (via this field or `--plan`), since hardware export is resolved per-plan. |
+| Plan | `plan` | string | Absolute TMT plan name to run. Optional; when omitted, tmt discovers and runs every enabled plan it finds (see [TMT Tests & fmf Metadata](../../explanation/tmt-tests.md)). `--execution vm` always requires an explicit plan (via this field or `--plan`), since hardware export is resolved per-plan. |
 
 For example, define a plan as follows:
 
@@ -78,6 +108,10 @@ plan = "/plans/example"
 After associating `example-tmt` with a component, run it locally with
 `azldev component test <component> --image-path <image.qcow2> --rpm <package.rpm>`.
 
+Prefer `--base-image-path` over the deprecated component `--image-path` alias.
+Use `--execution vm` rather than the deprecated `--provision virtual` spelling,
+and `--execution host` rather than `--provision local`.
+
 ### Pytest Fields
 
 The `[tests.<name>.pytest]` subtable configures a pytest run. azldev validates
@@ -91,6 +125,7 @@ configured arguments.
 | Test paths | `test-paths` | string array | Yes | Test file paths or directories passed to pytest as positional arguments. Must be a non-empty list of non-empty strings. Each entry is glob-expanded (including recursive `**`) relative to `working-dir`. Patterns that match nothing are passed through unchanged so pytest reports the failure. |
 | Extra args | `extra-args` | string array | No | Additional arguments passed to pytest verbatim, after placeholder substitution (see [Placeholders](#placeholders)). |
 | Install mode | `install` | string | No | How dependencies are installed into the venv. One of `pyproject`, `requirements`, or `none` (default). |
+| Source | `source` | table (`git-url`, `ref`) | No | Optional pinned test repository. With a source, `working-dir` is relative to its checkout. Without one, existing config-file-relative path semantics are preserved. |
 
 #### Install modes
 
@@ -101,9 +136,8 @@ configured arguments.
 | `none` (default) | Skips dependency installation entirely. The venv must already contain pytest and its dependencies (pytest is invoked as the venv interpreter's `-m pytest`, not from `PATH`). |
 
 `--junit-xml` output requested via `azldev image test --junit-xml <path>` is
-appended automatically; do not add it to `extra-args`. Relative `--junit-xml`
-paths are resolved against the user's current working directory (not
-`working-dir`).
+appended automatically; do not add it to `extra-args`. Relative CLI paths, including `--junit-xml`, are resolved against the selected
+project directory (including `-C`), not the framework's working directory.
 
 #### Placeholders
 
@@ -116,6 +150,8 @@ substituted at run time. They are **not** substituted in `test-paths`.
 | `{image-name}` | Name of the image being tested |
 | `{capabilities}` | Comma-separated names of enabled boolean capabilities |
 | `{properties}` | JSON object containing the image's string properties |
+| `{inputs-path}` | Pytest: path to the JSON artifact manifest (also in `AZLDEV_TEST_INPUTS`) |
+| `{subject-name}` | Pytest: component or image name under test |
 
 ## Test Group
 
