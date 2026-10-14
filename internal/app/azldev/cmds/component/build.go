@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
+	"time"
 
 	rpmlib "github.com/cavaliergopher/rpm"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
+	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/artifacts"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/componentbuilder"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/components"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/sources"
@@ -21,6 +24,7 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/defers"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/localrepo"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/qemu"
 	"github.com/spf13/cobra"
 )
 
@@ -312,6 +316,19 @@ func buildComponent(
 	)
 	if err != nil {
 		return results, err
+	}
+
+	if len(results.RPMPaths) > 0 {
+		arch := options.MockConfigOpts["target_arch"]
+		if arch == "" {
+			arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
+		}
+		if err := artifacts.RecordBuild(env, env.OutputDir(), artifacts.BuildRecord{
+			Name: component.GetName(), Kind: "component", Arch: arch,
+			BuiltAt: time.Now().UTC(), Paths: results.RPMPaths,
+		}); err != nil {
+			return results, fmt.Errorf("record component build:\n%w", err)
+		}
 	}
 
 	return results, nil
