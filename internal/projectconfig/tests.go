@@ -120,6 +120,9 @@ type TestDefinition struct {
 	// valid target for this test. Tokens are matched against [ImageCapabilities].
 	RequiredCapabilities []string `toml:"required-capabilities,omitempty" json:"requiredCapabilities,omitempty" jsonschema:"title=Required capabilities,description=Capability tokens the image must declare"`
 
+	// Execution supplies framework-independent defaults; command-line options override them.
+	Execution TestExecutionConfig `toml:"execution,omitempty" json:"execution,omitempty" jsonschema:"title=Execution defaults,description=Local test strategy and named supporting image defaults"`
+
 	// Framework-specific subtables. Kept untyped so framework schema can evolve
 	// independently of the dev-tools type definitions.
 	Lisa   map[string]any `toml:"lisa,omitempty"   json:"lisa,omitempty"   jsonschema:"title=LISA config,description=LISA-specific configuration"`
@@ -317,6 +320,9 @@ func (cfg *ProjectConfig) ResolveComponentTests(component *ComponentConfig) ([]R
 
 // Validate checks that exactly one framework subtable is set and it matches Type.
 func (t TestDefinition) Validate(testName string) error {
+	if err := t.Execution.Validate(); err != nil {
+		return fmt.Errorf("test %#q:\n%w", testName, err)
+	}
 	if t.Type == "" {
 		return fmt.Errorf("%w: test %#q is missing required field 'type'", ErrMissingTestField, testName)
 	}
@@ -393,6 +399,18 @@ func (t TestDefinition) Validate(testName string) error {
 // validatePytestConfig checks that a [tests.X.pytest] subtable sets both
 // 'working-dir' and 'test-paths', which are mandatory for pytest tests.
 func validatePytestConfig(pytest map[string]any, testName string) error {
+	if rawSource, exists := pytest["source"]; exists {
+		source, ok := rawSource.(map[string]any)
+		if !ok {
+			return fmt.Errorf("test %#q: 'pytest.source' must be a table", testName)
+		}
+		gitURL, _ := source["git-url"].(string)
+		ref, _ := source["ref"].(string)
+		gitSource := GitSourceConfig{GitURL: gitURL, Ref: ref}
+		if err := gitSource.Validate("pytest.source"); err != nil {
+			return err
+		}
+	}
 	if !isNonEmptyString(pytest["working-dir"]) {
 		return fmt.Errorf(
 			"%w: test %#q pytest.working-dir is required and must be a non-empty string",

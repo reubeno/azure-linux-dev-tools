@@ -117,6 +117,10 @@ func (cfg *ProjectConfig) validate(withoutLockfile bool) error {
 		return err
 	}
 
+	if err := validatePublishedArtifacts(cfg.Distros); err != nil {
+		return err
+	}
+
 	if err := validateNewTestReferences(cfg.Tests, cfg.TestGroups, cfg.Components, cfg.Images); err != nil {
 		return err
 	}

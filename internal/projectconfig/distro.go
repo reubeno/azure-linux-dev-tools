@@ -93,6 +93,15 @@ type DistroVersionDefinition struct {
 	// ordered lists of input references. Each entry references either a
 	// [RpmRepoResource] or a [RpmRepoSet]; sets are expanded at validation time.
 	Inputs DistroVersionInputs `toml:"inputs,omitempty" json:"inputs,omitempty" jsonschema:"title=Inputs,description=Per-use-case input repositories"`
+
+	// Images identifies published images independently of project-local build recipes.
+	Images map[string]PublishedImage `toml:"images,omitempty" json:"images,omitempty" jsonschema:"title=Published images,description=Named published images indexed by architecture"`
+
+	// TestBaseImages selects named supporting images for VM and container tests.
+	TestBaseImages map[string]string `toml:"test-base-images,omitempty" json:"testBaseImages,omitempty" jsonschema:"title=Test base images,description=Default named base images by execution strategy (vm or container)"`
+
+	// TestPackages identifies complete published component builds used by explicit LKG requests.
+	TestPackages map[string]PublishedPackages `toml:"test-packages,omitempty" json:"testPackages,omitempty" jsonschema:"title=Published test packages,description=Complete LKG binary package sets indexed by component and architecture"`
 }
 
 // Use-case identifiers for [DistroVersionInputs]. These match the TOML keys
