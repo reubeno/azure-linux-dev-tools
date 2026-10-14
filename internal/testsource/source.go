@@ -5,6 +5,7 @@
 package testsource
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -20,54 +21,70 @@ import (
 // The returned checkout is read-only input; per-run generated files belong in the run directory.
 func Materialize(ctx opctx.Ctx, source *projectconfig.GitSourceConfig, local, cacheDir string) (string, error) {
 	if local != "" {
-		if !filepath.IsAbs(local) {
-			return "", fmt.Errorf("source directory must be absolute: %#q", local)
-		}
-		exists, err := fileutils.DirExists(ctx.FS(), local)
-		if err != nil {
-			return "", err
-		}
-		if !exists {
-			return "", fmt.Errorf("source directory %#q does not exist", local)
-		}
+		return localDirectory(ctx, local)
+	}
 
-		return local, nil
-	}
 	if source == nil {
-		return "", fmt.Errorf("a pinned source or local source directory is required")
+		return "", errors.New("a pinned source or local source directory is required")
 	}
+
 	if err := source.Validate("test source"); err != nil {
-		return "", err
+		return "", fmt.Errorf("validate test source:\n%w", err)
 	}
+
 	if !filepath.IsAbs(cacheDir) {
 		return "", fmt.Errorf("source cache directory must be absolute: %#q", cacheDir)
 	}
+
 	dir := filepath.Join(cacheDir, "sources", pythonenv.Key(source.GitURL, source.Ref))
 	if ctx.DryRun() {
 		return dir, nil
 	}
+
 	if err := prereqs.RequireExecutable(ctx, "git", nil); err != nil {
-		return "", err
+		return "", fmt.Errorf("test source prerequisite:\n%w", err)
 	}
+
 	provider, err := git.NewGitProviderImpl(ctx, ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("materialize:\n%w", err)
 	}
+
 	exists, err := fileutils.DirExists(ctx.FS(), dir)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("materialize:\n%w", err)
 	}
+
 	if !exists {
 		if err := fileutils.MkdirAll(ctx.FS(), filepath.Dir(dir)); err != nil {
-			return "", err
+			return "", fmt.Errorf("create source cache parent:\n%w", err)
 		}
+
 		if err := provider.Clone(ctx, source.GitURL, dir); err != nil {
-			return "", err
+			return "", fmt.Errorf("clone test source:\n%w", err)
 		}
 	}
+
 	if err := provider.Checkout(ctx, dir, source.Ref); err != nil {
 		return "", fmt.Errorf("checkout pinned test source:\n%w", err)
 	}
 
 	return dir, nil
+}
+
+func localDirectory(ctx opctx.Ctx, local string) (string, error) {
+	if !filepath.IsAbs(local) {
+		return "", fmt.Errorf("source directory must be absolute: %#q", local)
+	}
+
+	exists, err := fileutils.DirExists(ctx.FS(), local)
+	if err != nil {
+		return "", fmt.Errorf("check local test source:\n%w", err)
+	}
+
+	if !exists {
+		return "", fmt.Errorf("source directory %#q does not exist", local)
+	}
+
+	return local, nil
 }

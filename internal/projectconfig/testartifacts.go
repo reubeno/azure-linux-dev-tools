@@ -5,6 +5,7 @@ package projectconfig
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -13,7 +14,7 @@ import (
 
 // TestExecutionConfig adds optional defaults without changing framework-specific subtables.
 type TestExecutionConfig struct {
-	Strategy string `toml:"strategy,omitempty" json:"strategy,omitempty" jsonschema:"enum=vm,enum=container,enum=ssh,enum=host,title=Strategy,description=Default local test execution strategy"`
+	Strategy   string            `toml:"strategy,omitempty"    json:"strategy,omitempty"   jsonschema:"enum=vm,enum=container,enum=ssh,enum=host,title=Strategy,description=Default local test execution strategy"`
 	BaseImages map[string]string `toml:"base-images,omitempty" json:"baseImages,omitempty" jsonschema:"title=Base images,description=Named supporting image for each execution strategy (vm or container)"`
 }
 
@@ -31,8 +32,8 @@ type PublishedImage struct {
 }
 
 type PublishedImageArtifact struct {
-	Format string `toml:"format" json:"format" jsonschema:"required,enum=qcow2,enum=raw,enum=vhd,enum=vhdx,enum=oci,title=Format"`
-	URI string `toml:"uri" json:"uri" jsonschema:"required,title=Location,description=HTTP(S) disk/archive URL or docker:// OCI registry reference"`
+	Format string `toml:"format"           json:"format"           jsonschema:"required,enum=qcow2,enum=raw,enum=vhd,enum=vhdx,enum=oci,title=Format"`
+	URI    string `toml:"uri"              json:"uri"              jsonschema:"required,title=Location,description=HTTP(S) disk/archive URL or docker:// OCI registry reference"`
 	SHA256 string `toml:"sha256,omitempty" json:"sha256,omitempty" jsonschema:"title=SHA-256,description=Optional expected download digest"`
 }
 
@@ -42,7 +43,7 @@ type PublishedPackages struct {
 }
 
 type PublishedPackageArtifact struct {
-	URI string `toml:"uri" json:"uri" jsonschema:"required,title=RPM location,description=HTTP(S) URL of a binary RPM"`
+	URI    string `toml:"uri"              json:"uri"              jsonschema:"required,title=RPM location,description=HTTP(S) URL of a binary RPM"`
 	SHA256 string `toml:"sha256,omitempty" json:"sha256,omitempty" jsonschema:"title=SHA-256,description=Optional expected download digest"`
 }
 
@@ -51,6 +52,7 @@ func validateBaseImageNames(images map[string]string) error {
 		if strategy != "vm" && strategy != "container" {
 			return fmt.Errorf("base images are only valid for 'vm' or 'container', not %#q", strategy)
 		}
+
 		if err := validateArtifactName(name); err != nil {
 			return err
 		}
@@ -71,17 +73,19 @@ func validateArtifactName(name string) error {
 func validatePublishedLocation(uri, digest string, oci bool) error {
 	location, err := url.Parse(uri)
 	if err != nil || location.Host == "" || location.User != nil ||
-		(location.Scheme != "https" && location.Scheme != "http" && !(oci && location.Scheme == "docker")) {
+		(location.Scheme != "https" && location.Scheme != "http" && (!oci || location.Scheme != "docker")) {
 		return fmt.Errorf("invalid published artifact URI %#q", uri)
 	}
+
 	if digest != "" {
 		decoded, err := hex.DecodeString(digest)
 		if err != nil || len(decoded) != 32 {
 			return fmt.Errorf("invalid SHA-256 digest %#q", digest)
 		}
 	}
+
 	if location.Scheme == "docker" && digest != "" {
-		return fmt.Errorf("OCI registry references use '@sha256:...' in 'uri', not the download 'sha256' field")
+		return errors.New("OCI registry references use '@sha256:...' in 'uri', not the download 'sha256' field")
 	}
 
 	return nil
@@ -103,55 +107,84 @@ func (v DistroVersionDefinition) validateTestArtifacts() error {
 	if err := validateBaseImageNames(v.TestBaseImages); err != nil {
 		return err
 	}
+
 	for _, name := range v.TestBaseImages {
 		if _, exists := v.Images[name]; !exists {
 			return fmt.Errorf("test base image %#q is not in the distro version's published images", name)
 		}
 	}
+
 	for name, image := range v.Images {
-		if err := validateArtifactName(name); err != nil {
+		if err := image.validate(name); err != nil {
 			return err
 		}
-		if len(image.Architectures) == 0 {
-			return fmt.Errorf("published image %#q has no architecture variants", name)
+	}
+
+	for name, packages := range v.TestPackages {
+		if err := packages.validate(name); err != nil {
+			return err
 		}
-		for arch, variants := range image.Architectures {
-			if !slices.Contains(SupportedImageArchitectures(), arch) || len(variants) == 0 {
-				return fmt.Errorf("published image %#q has invalid or empty architecture %#q", name, arch)
+	}
+
+	return nil
+}
+
+func (image PublishedImage) validate(name string) error {
+	if err := validateArtifactName(name); err != nil {
+		return err
+	}
+
+	if len(image.Architectures) == 0 {
+		return fmt.Errorf("published image %#q has no architecture variants", name)
+	}
+
+	for arch, variants := range image.Architectures {
+		if !slices.Contains(SupportedImageArchitectures(), arch) || len(variants) == 0 {
+			return fmt.Errorf("published image %#q has invalid or empty architecture %#q", name, arch)
+		}
+
+		seen := make(map[string]bool)
+		for _, variant := range variants {
+			if !slices.Contains([]string{"qcow2", "raw", "vhd", "vhdx", "oci"}, variant.Format) || seen[variant.Format] {
+				return fmt.Errorf("published image %#q has invalid or duplicate format %#q", name, variant.Format)
 			}
-			seen := make(map[string]bool)
-			for _, variant := range variants {
-				if !slices.Contains([]string{"qcow2", "raw", "vhd", "vhdx", "oci"}, variant.Format) || seen[variant.Format] {
-					return fmt.Errorf("published image %#q has invalid or duplicate format %#q", name, variant.Format)
-				}
-				seen[variant.Format] = true
-				if err := validatePublishedLocation(variant.URI, variant.SHA256, variant.Format == "oci"); err != nil {
-					return fmt.Errorf("published image %#q:\n%w", name, err)
-				}
+
+			seen[variant.Format] = true
+			if err := validatePublishedLocation(variant.URI, variant.SHA256, variant.Format == "oci"); err != nil {
+				return fmt.Errorf("published image %#q:\n%w", name, err)
 			}
 		}
 	}
-	for name, packages := range v.TestPackages {
-		if err := validateArtifactName(name); err != nil {
-			return err
+
+	return nil
+}
+
+func (packages PublishedPackages) validate(name string) error {
+	if err := validateArtifactName(name); err != nil {
+		return err
+	}
+
+	if len(packages.Architectures) == 0 {
+		return fmt.Errorf("published packages %#q have no architecture variants", name)
+	}
+
+	for arch, rpms := range packages.Architectures {
+		if !slices.Contains(SupportedImageArchitectures(), arch) || len(rpms) == 0 {
+			return fmt.Errorf("published packages %#q have invalid or empty architecture %#q", name, arch)
 		}
-		if len(packages.Architectures) == 0 {
-			return fmt.Errorf("published packages %#q have no architecture variants", name)
-		}
-		for arch, rpms := range packages.Architectures {
-			if !slices.Contains(SupportedImageArchitectures(), arch) || len(rpms) == 0 {
-				return fmt.Errorf("published packages %#q have invalid or empty architecture %#q", name, arch)
+
+		seen := make(map[string]bool)
+
+		for _, rpm := range rpms {
+			if err := validatePublishedLocation(rpm.URI, rpm.SHA256, false); err != nil {
+				return err
 			}
-			seen := make(map[string]bool)
-			for _, rpm := range rpms {
-				if err := validatePublishedLocation(rpm.URI, rpm.SHA256, false); err != nil {
-					return err
-				}
-				if seen[rpm.URI] {
-					return fmt.Errorf("duplicate published RPM URI %#q", rpm.URI)
-				}
-				seen[rpm.URI] = true
+
+			if seen[rpm.URI] {
+				return fmt.Errorf("duplicate published RPM URI %#q", rpm.URI)
 			}
+
+			seen[rpm.URI] = true
 		}
 	}
 

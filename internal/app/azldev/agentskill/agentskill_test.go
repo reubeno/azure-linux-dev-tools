@@ -126,6 +126,22 @@ func TestImageSkillDocumentsRuntimeConfigOverride(t *testing.T) {
 	assert.Contains(t, doc, "`kiwi-config-override`")
 }
 
+func TestSkillsDocumentArtifactTestDefaults(t *testing.T) {
+	for _, withoutLockfile := range []bool{false, true} {
+		catalog := agentskill.NewCatalog(withoutLockfile)
+		component, err := catalog.SkillDocument("azldev-build-component", testParams())
+		require.NoError(t, err)
+		assert.Contains(t, component, "Component tests reuse local RPMs")
+		assert.Contains(t, component, "--rebuild-base-image")
+		assert.Contains(t, component, "AZLDEV_TEST_INPUTS")
+
+		image, err := catalog.SkillDocument("azldev-image", testParams())
+		require.NoError(t, err)
+		assert.Contains(t, image, "--artifact-source lkg")
+		assert.Contains(t, image, "Artifact age is")
+	}
+}
+
 func TestImageSkillDocumentsArchitecturesField(t *testing.T) {
 	doc, err := agentskill.SkillDocument("azldev-image", testParams())
 	require.NoError(t, err)

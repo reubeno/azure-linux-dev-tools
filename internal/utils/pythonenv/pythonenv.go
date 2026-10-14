@@ -27,25 +27,30 @@ func Key(parts ...string) string {
 // Ensure creates a virtual environment when needed and returns its Python executable.
 func Ensure(ctx opctx.Ctx, dir string) (string, error) {
 	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("Python environment directory must be absolute: %#q", dir)
+		return "", fmt.Errorf("python environment directory must be absolute: %#q", dir)
 	}
+
 	python := filepath.Join(dir, "bin", "python3")
 	if ctx.DryRun() {
 		return python, nil
 	}
+
 	if err := prereqs.RequireExecutable(ctx, "python3", nil); err != nil {
-		return "", err
+		return "", fmt.Errorf("python prerequisite:\n%w", err)
 	}
+
 	exists, err := fileutils.Exists(ctx.FS(), python)
 	if err != nil {
 		return "", fmt.Errorf("check Python environment:\n%w", err)
 	}
+
 	if !exists {
 		if err := fileutils.MkdirAll(ctx.FS(), filepath.Dir(dir)); err != nil {
-			return "", err
+			return "", fmt.Errorf("create Python environment parent:\n%w", err)
 		}
+
 		if err := testframework.Command(ctx, "", "python3", "-m", "venv", dir); err != nil {
-			return "", err
+			return "", fmt.Errorf("create Python environment:\n%w", err)
 		}
 	}
 
@@ -54,5 +59,10 @@ func Ensure(ctx opctx.Ctx, dir string) (string, error) {
 
 // Install installs explicitly requested packages into an isolated environment.
 func Install(ctx opctx.Ctx, python, dir string, args ...string) error {
-	return testframework.Command(ctx, dir, python, append([]string{"-m", "pip", "install", "--quiet"}, args...)...)
+	commandArgs := append([]string{"-m", "pip", "install", "--quiet"}, args...)
+	if err := testframework.Command(ctx, dir, python, commandArgs...); err != nil {
+		return fmt.Errorf("install Python dependencies:\n%w", err)
+	}
+
+	return nil
 }

@@ -57,6 +57,18 @@ type ImageBuildResult struct {
 	ArtifactPaths []string `json:"artifactPaths" table:"Artifact Paths"`
 }
 
+// ArtifactBuilder adapts image building to the test artifact resolver.
+func ArtifactBuilder(env *azldev.Env) func(name, arch string) ([]string, error) {
+	return func(name, arch string) ([]string, error) {
+		result, err := BuildImage(env, &ImageBuildOptions{ImageName: name, TargetArch: ImageArch(arch)})
+		if err != nil {
+			return nil, err
+		}
+
+		return result.ArtifactPaths, nil
+	}
+}
+
 // ImageArch represents the architecture of an image, such as "x86_64" or "aarch64".
 type ImageArch string
 
@@ -176,14 +188,8 @@ func BuildImage(env *azldev.Env, options *ImageBuildOptions) (*ImageBuildResult,
 		return nil, fmt.Errorf("failed to link image artifacts to output directory:\n%w", err)
 	}
 
-	arch := string(options.TargetArch)
-	if arch == "" {
-		arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
-	}
-	if err := artifacts.RecordBuild(env, env.OutputDir(), artifacts.BuildRecord{
-		Name: options.ImageName, Kind: "image", Arch: arch, BuiltAt: time.Now().UTC(), Paths: artifactPaths,
-	}); err != nil {
-		return nil, fmt.Errorf("record image build:\n%w", err)
+	if err := recordImageBuild(env, options, artifactPaths); err != nil {
+		return nil, err
 	}
 
 	return &ImageBuildResult{
@@ -193,16 +199,33 @@ func BuildImage(env *azldev.Env, options *ImageBuildOptions) (*ImageBuildResult,
 	}, nil
 }
 
+func recordImageBuild(env *azldev.Env, options *ImageBuildOptions, paths []string) error {
+	arch := string(options.TargetArch)
+	if arch == "" {
+		arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
+	}
+
+	if err := artifacts.RecordBuild(env, env.OutputDir(), artifacts.BuildRecord{
+		Name: options.ImageName, Kind: "image", Arch: arch, BuiltAt: time.Now().UTC(), Paths: paths,
+	}); err != nil {
+		return fmt.Errorf("record image build:\n%w", err)
+	}
+
+	return nil
+}
+
 func resolveBuildImage(env *azldev.Env, options *ImageBuildOptions) (*projectconfig.ImageConfig, error) {
 	cfg := env.Config()
 	if cfg == nil {
 		return nil, errors.New("no project configuration loaded")
 	}
+
 	if options.ImageName == "" && len(cfg.Images) == 1 {
 		for name := range cfg.Images {
 			options.ImageName = name
 		}
 	}
+
 	imageConfig, exists := cfg.Images[options.ImageName]
 	if !exists {
 		return nil, fmt.Errorf("no local build recipe for image %#q", options.ImageName)
@@ -323,9 +346,11 @@ func validateFileExists(env *azldev.Env, path string) error {
 	if err != nil {
 		return fmt.Errorf("file not found at %#q:\n%w", path, err)
 	}
+
 	if info.IsDir() {
 		return fmt.Errorf("%#q is a directory, expected a file", path)
 	}
+
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%#q is not a regular file", path)
 	}

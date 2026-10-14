@@ -4,18 +4,22 @@
 package image
 
 import (
+	"fmt"
+
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/imagebuilder"
 	"github.com/spf13/cobra"
 )
 
-type ImageBuildOptions = imagebuilder.ImageBuildOptions
-type ImageBuildResult = imagebuilder.ImageBuildResult
-type ImageArch = imagebuilder.ImageArch
+type (
+	ImageBuildOptions = imagebuilder.ImageBuildOptions
+	ImageBuildResult  = imagebuilder.ImageBuildResult
+	ImageArch         = imagebuilder.ImageArch
+)
 
 const (
 	ImageArchDefault = imagebuilder.ImageArchDefault
-	ImageArchX86_64 = imagebuilder.ImageArchX86_64
+	ImageArchX86_64  = imagebuilder.ImageArchX86_64
 	ImageArchAarch64 = imagebuilder.ImageArchAarch64
 )
 
@@ -25,13 +29,18 @@ func buildOnAppInit(_ *azldev.App, parentCmd *cobra.Command) {
 
 // BuildImage delegates to the reusable image build service.
 func BuildImage(env *azldev.Env, options *ImageBuildOptions) (*ImageBuildResult, error) {
-	return imagebuilder.BuildImage(env, options)
+	result, err := imagebuilder.BuildImage(env, options)
+	if err != nil {
+		return result, fmt.Errorf("build image:\n%w", err)
+	}
+
+	return result, nil
 }
 
 func NewImageBuildCmd() *cobra.Command {
 	options := &ImageBuildOptions{}
 	cmd := &cobra.Command{
-		Use: "build [image-name]",
+		Use:   "build [image-name]",
 		Short: "Build an image using kiwi-ng",
 		Long: `Build an image using kiwi-ng.
 

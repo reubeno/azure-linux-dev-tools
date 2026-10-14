@@ -318,20 +318,30 @@ func buildComponent(
 		return results, err
 	}
 
-	if len(results.RPMPaths) > 0 {
-		arch := options.MockConfigOpts["target_arch"]
-		if arch == "" {
-			arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
-		}
-		if err := artifacts.RecordBuild(env, env.OutputDir(), artifacts.BuildRecord{
-			Name: component.GetName(), Kind: "component", Arch: arch,
-			BuiltAt: time.Now().UTC(), Paths: results.RPMPaths,
-		}); err != nil {
-			return results, fmt.Errorf("record component build:\n%w", err)
-		}
+	if err := recordComponentBuild(env, component.GetName(), options, results.RPMPaths); err != nil {
+		return results, err
 	}
 
 	return results, nil
+}
+
+func recordComponentBuild(env *azldev.Env, name string, options *ComponentBuildOptions, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	arch := options.MockConfigOpts["target_arch"]
+	if arch == "" {
+		arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
+	}
+
+	if err := artifacts.RecordBuild(env, env.OutputDir(), artifacts.BuildRecord{
+		Name: name, Kind: "component", Arch: arch, BuiltAt: time.Now().UTC(), Paths: paths,
+	}); err != nil {
+		return fmt.Errorf("record component build:\n%w", err)
+	}
+
+	return nil
 }
 
 func buildComponentUsingBuilder(

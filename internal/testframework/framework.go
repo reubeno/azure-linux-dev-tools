@@ -18,7 +18,7 @@ import (
 type Strategy string
 
 const (
-	VM        Strategy = "vm"
+	VM        Strategy = "vm" //nolint:varnamelen // VM is the conventional virtual-machine acronym.
 	Container Strategy = "container"
 	SSH       Strategy = "ssh"
 	Host      Strategy = "host"
@@ -47,6 +47,7 @@ func (s ExecutionSpec) Validate() error {
 		if s.SSHHost == "" || s.SSHUser == "" {
 			return errors.New("execution strategy 'ssh' requires a host and user")
 		}
+
 		if s.SSHPort < 0 || s.SSHPort > 65535 {
 			return errors.New("SSH port must be between 1 and 65535")
 		}
@@ -94,14 +95,14 @@ const (
 
 // RunResult preserves the native report location as well as the normalized outcome.
 type RunResult struct {
-	Name       string        `json:"name" table:",sortkey"`
-	Framework  string        `json:"framework"`
-	Strategy   Strategy      `json:"strategy"`
-	Status     Status        `json:"status"`
-	Duration   time.Duration `json:"duration"`
-	OutputDir  string        `json:"outputDir"`
-	JUnitPath  string        `json:"junitPath,omitempty"`
-	Error      string        `json:"error,omitempty"`
+	Name      string        `json:"name"                table:",sortkey"`
+	Framework string        `json:"framework"`
+	Strategy  Strategy      `json:"strategy"`
+	Status    Status        `json:"status"`
+	Duration  time.Duration `json:"duration"`
+	OutputDir string        `json:"outputDir"`
+	JUnitPath string        `json:"junitPath,omitempty"`
+	Error     string        `json:"error,omitempty"`
 }
 
 // ErrTestFailed distinguishes failing assertions from setup and execution errors.
@@ -109,8 +110,10 @@ var ErrTestFailed = errors.New("test assertions failed")
 
 // Runner is implemented by a configured framework adapter.
 type Runner interface {
-	Requirements(ExecutionSpec) (Requirements, error)
-	Run(opctx.Ctx, RunRequest) (RunResult, error)
+	// Requirements validates strategy support and describes required artifacts.
+	Requirements(execution ExecutionSpec) (Requirements, error)
+	// Run executes against materialized inputs and retains native reports.
+	Run(ctx opctx.Ctx, request RunRequest) (RunResult, error)
 }
 
 // ValidateName keeps managed test directories below their run directory.

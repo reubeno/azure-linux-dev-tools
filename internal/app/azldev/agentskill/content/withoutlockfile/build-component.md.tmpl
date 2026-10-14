@@ -6,8 +6,9 @@ description: {{ printf "%q" .Description }}
 # Build and debug a component
 
 **Never install built RPMs on your host** — they target the distro, not your dev
-machine. Test them in a chroot with the `azldev-mock` skill. Building and testing are separate
-steps: `azldev comp build` produces RPMs; it does not test them.
+machine. Use isolated component tests or a chroot with the `azldev-mock` skill.
+`azldev comp build` runs RPM build-time checks; `azldev comp test <name>` runs
+the separately configured artifact tests.
 
 ## Build
 
@@ -31,12 +32,22 @@ investigate → modify → render → build → test → inspect
 | Modify | edit the component's `.comp.toml` (see the `azldev-overlays` and `azldev-comp-toml` skills) |
 | Verify | `azldev comp render -p <name>` (fast — skips source tarballs) |
 | Build | `azldev comp build -p <name>` |
-| Test | `azldev adv mock shell --add-package <rpm>` (see the `azldev-mock` skill) |
+| Test | `azldev comp test <name>` (or a mock shell for manual debugging) |
 | Inspect | `azldev comp build -p <name> --preserve-buildenv always`, then a mock shell |
 
 Prefer `comp render` for quick overlay verification; use `comp diff-sources` to see the
 exact overlay effect (it fetches sources once, applies overlays to a copy, and diffs the
 two trees). Builds can be slow — set generous timeouts.
+
+Component tests reuse local RPMs, building when missing; `--rebuild` forces a
+build. Supporting images default to named LKG images in the selected distro
+version. Override with `--base-image`, `--base-image-path`, or
+`--rebuild-base-image`; `--rpm` selects explicit candidates instead of the
+complete component output. Mutually conflicting subpackages require an
+explicit compatible subset for now. `--test` accepts test/group names.
+TMT supports `--execution vm`, `container`, `ssh`, or `host`; host/SSH execution
+may modify the target and must only be used on designated test systems.
+LISA uses a VM; pytest inspects candidate files via `AZLDEV_TEST_INPUTS`.
 
 Finalize with `azldev comp refresh-upstream-commit -p <name>` before opening a PR (see the
 `azldev-refresh-upstream-commit` skill).

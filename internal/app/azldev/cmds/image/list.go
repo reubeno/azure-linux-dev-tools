@@ -4,6 +4,7 @@
 package image
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,19 @@ import (
 type ListImageOptions struct {
 	// Name patterns to filter images. Supports glob patterns (*, ?, []).
 	ImageNamePatterns []string
+}
+
+func serializeImageProperties(properties map[string]string) (string, error) {
+	if properties == nil {
+		properties = map[string]string{}
+	}
+
+	data, err := json.Marshal(properties)
+	if err != nil {
+		return "", fmt.Errorf("serialize image properties:\n%w", err)
+	}
+
+	return string(data), nil
 }
 
 // ImageListResult represents an image in the list output.

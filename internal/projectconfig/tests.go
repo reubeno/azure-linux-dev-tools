@@ -323,6 +323,7 @@ func (t TestDefinition) Validate(testName string) error {
 	if err := t.Execution.Validate(); err != nil {
 		return fmt.Errorf("test %#q:\n%w", testName, err)
 	}
+
 	if t.Type == "" {
 		return fmt.Errorf("%w: test %#q is missing required field 'type'", ErrMissingTestField, testName)
 	}
@@ -404,13 +405,16 @@ func validatePytestConfig(pytest map[string]any, testName string) error {
 		if !ok {
 			return fmt.Errorf("test %#q: 'pytest.source' must be a table", testName)
 		}
+
 		gitURL, _ := source["git-url"].(string)
 		ref, _ := source["ref"].(string)
+
 		gitSource := GitSourceConfig{GitURL: gitURL, Ref: ref}
 		if err := gitSource.Validate("pytest.source"); err != nil {
 			return err
 		}
 	}
+
 	if !isNonEmptyString(pytest["working-dir"]) {
 		return fmt.Errorf(
 			"%w: test %#q pytest.working-dir is required and must be a non-empty string",

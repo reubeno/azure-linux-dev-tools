@@ -38,6 +38,7 @@ func TestManagedSourceIdentityIncludesRepository(t *testing.T) {
 	source := projectconfig.GitSourceConfig{GitURL: "https://example.test/a.git", Ref: strings.Repeat("a", 40)}
 	first, err := testsource.Materialize(env.Env, &source, "", "/cache")
 	require.NoError(t, err)
+
 	source.GitURL = "https://example.test/b.git"
 	second, err := testsource.Materialize(env.Env, &source, "", "/cache")
 	require.NoError(t, err)

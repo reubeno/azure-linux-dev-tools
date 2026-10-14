@@ -21,12 +21,14 @@ func Command(ctx opctx.Ctx, dir, program string, args ...string) error {
 	raw.Stdout = os.Stdout
 
 	var stderr bytes.Buffer
+
 	raw.Stderr = io.MultiWriter(os.Stderr, &stderr)
 
 	cmd, err := ctx.Command(raw)
 	if err != nil {
 		return fmt.Errorf("create command %#q:\n%w", program, err)
 	}
+
 	if err := cmd.Run(ctx); err != nil {
 		return fmt.Errorf("run %#q (%s):\n%w", program, strings.TrimSpace(stderr.String()), err)
 	}

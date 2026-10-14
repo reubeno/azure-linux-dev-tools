@@ -31,6 +31,19 @@ explicit `--image-path` / `--iso`. Confirm current flags with
 
 ## Registering an image
 
+`azldev image test <name>` reuses local build output, building when missing.
+`--rebuild` forces a build, `--artifact-source lkg` consumes the distro version's
+published image, and `--image-path` selects an explicit file. Artifact age is
+logged without claiming freshness. Use `--test` for a test/group selector and
+`--junit-xml` for an aggregated report. LISA uses VM execution, TMT supports VM
+and container image tests, and pytest inspects artifacts from the host.
+
+Published images live under
+`[distros.<distro>.versions.<version>.images.<name>.architectures]`, independently
+of local image recipes. Each architecture contains `{ format, uri }` entries
+with optional download `sha256`. Component tests use named LKG supporting
+images from the distro version's `test-base-images` defaults.
+
 Images are declared under `[images.<name>]` (conventionally in an `images.toml`):
 
 ```toml
