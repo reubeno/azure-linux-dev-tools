@@ -34,6 +34,10 @@ type Options struct {
 	FailFast         bool
 }
 
+func (o Options) hasSSHOptions() bool {
+	return o.SSHHost != "" || o.SSHUser != "" || o.SSHKey != "" || o.SSHPort != 0
+}
+
 func (o Options) subjectSelection(kind string) artifacts.Selection {
 	result := artifacts.Selection{Source: o.ArtifactSource, Rebuild: o.Rebuild}
 	if kind == "component" {

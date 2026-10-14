@@ -27,11 +27,59 @@ func executionStrategy(test projectconfig.ResolvedTest, override string) string 
 		return test.Definition.Execution.Strategy
 	}
 
-	if test.Definition.Type == "pytest" {
+	if test.Definition.Type == pytestFramework {
 		return "host"
 	}
 
 	return "vm"
+}
+
+func validateOverrides(tests []projectconfig.ResolvedTest, options Options) error {
+	frameworks := make(map[string]bool)
+	strategies := make(map[string]bool)
+
+	for _, test := range tests {
+		frameworks[test.Definition.Type] = true
+		strategies[executionStrategy(test, options.Strategy)] = true
+	}
+
+	if options.LisaDir != "" && !frameworks[lisaFramework] {
+		return errors.New("'--lisa-dir' requires a selected LISA test")
+	}
+
+	if options.Plan != "" && !frameworks[tmtFramework] {
+		return errors.New("'--plan' requires a selected TMT test")
+	}
+
+	if options.SourceDir != "" && !frameworks[tmtFramework] && !frameworks[pytestFramework] {
+		return errors.New("'--source-dir' requires a selected TMT or pytest test")
+	}
+
+	if !strategies["ssh"] && options.hasSSHOptions() {
+		return errors.New("SSH options require a selected test using execution strategy 'ssh'")
+	}
+
+	return nil
+}
+
+func executionFor(test projectconfig.ResolvedTest, options Options, strategy string) testframework.ExecutionSpec {
+	execution := options.execution(testframework.Strategy(strategy))
+	if test.Definition.Type != lisaFramework {
+		execution.FrameworkDir = ""
+	} else {
+		execution.SourceDir = ""
+	}
+
+	if test.Definition.Type != tmtFramework {
+		execution.Plan = ""
+	}
+
+	if execution.Strategy != testframework.SSH {
+		execution.SSHHost, execution.SSHUser, execution.SSHKey = "", "", ""
+		execution.SSHPort = 0
+	}
+
+	return execution
 }
 
 func selectBaseName(subject Subject, test projectconfig.ResolvedTest, requirements testframework.Requirements,

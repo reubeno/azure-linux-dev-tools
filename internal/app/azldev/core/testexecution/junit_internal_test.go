@@ -8,6 +8,7 @@ import (
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
+	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
@@ -16,6 +17,40 @@ import (
 )
 
 type failedRunner struct{}
+
+func TestMixedFrameworkOverridesAreRoutedPerTest(t *testing.T) {
+	tests := []projectconfig.ResolvedTest{
+		{Name: "lisa", Definition: projectconfig.TestDefinition{Type: "lisa", Lisa: map[string]any{"name": "smoke"}}},
+		{Name: "tmt", Definition: projectconfig.TestDefinition{Type: "tmt", Tmt: map[string]any{}}},
+	}
+	plans, err := planTests(Subject{Name: "curl", Kind: componentSubject}, tests, Options{
+		LisaDir: "/lisa", SourceDir: "/tests", Plan: "/plans/all", BaseImagePath: "/base.qcow2",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/lisa", plans[0].execution.FrameworkDir)
+	assert.Empty(t, plans[0].execution.SourceDir)
+	assert.Empty(t, plans[0].execution.Plan)
+	assert.Empty(t, plans[1].execution.FrameworkDir)
+	assert.Equal(t, "/tests", plans[1].execution.SourceDir)
+	assert.Equal(t, "/plans/all", plans[1].execution.Plan)
+	_, err = planTests(Subject{Name: "curl", Kind: componentSubject}, tests[:1], Options{Plan: "/unused"})
+	require.ErrorContains(t, err, "'--plan' requires")
+}
+
+func TestLegacyCapabilityMetadataIsPreserved(t *testing.T) {
+	test := projectconfig.ResolvedTest{
+		Name: "legacy",
+		Definition: projectconfig.TestDefinition{
+			Type: "pytest", RequiredCapabilities: []string{"custom-external-capability"},
+			Pytest: map[string]any{"working-dir": "/tests", "test-paths": []string{"test_image.py"}},
+		},
+	}
+	plans, err := planTests(Subject{Name: "base", Kind: imageSubject},
+		[]projectconfig.ResolvedTest{test}, Options{})
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	assert.Equal(t, test.Definition.RequiredCapabilities, plans[0].test.Definition.RequiredCapabilities)
+}
 
 func (failedRunner) Requirements(testframework.ExecutionSpec) (testframework.Requirements, error) {
 	return testframework.Requirements{}, nil

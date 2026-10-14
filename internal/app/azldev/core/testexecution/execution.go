@@ -38,6 +38,9 @@ type Subject struct {
 const (
 	imageSubject     = "image"
 	componentSubject = "component"
+	tmtFramework     = "tmt"
+	lisaFramework    = "lisa"
+	pytestFramework  = "pytest"
 )
 
 type plannedTest struct {
@@ -184,6 +187,10 @@ func planTests(subject Subject, tests []projectconfig.ResolvedTest, options Opti
 		return nil, errors.New("no tests selected")
 	}
 
+	if err := validateOverrides(tests, options); err != nil {
+		return nil, err
+	}
+
 	plans := make([]plannedTest, 0, len(tests))
 	for _, test := range tests {
 		plan, err := planOne(subject, test, options)
@@ -209,7 +216,7 @@ func planOne(subject Subject, test projectconfig.ResolvedTest, options Options) 
 
 	strategy := executionStrategy(test, options.Strategy)
 
-	execution := options.execution(testframework.Strategy(strategy))
+	execution := executionFor(test, options, strategy)
 	if err := execution.Validate(); err != nil {
 		return plannedTest{}, fmt.Errorf("plan one:\n%w", err)
 	}
@@ -225,14 +232,6 @@ func planOne(subject Subject, test projectconfig.ResolvedTest, options Options) 
 
 	if subject.Kind == componentSubject && !requirements.PackagesSupported {
 		return plannedTest{}, errors.New("this framework/strategy cannot consume candidate component packages")
-	}
-
-	if subject.Kind == imageSubject {
-		for _, capability := range test.Definition.RequiredCapabilities {
-			if !slices.Contains(subject.Capabilities, capability) {
-				return plannedTest{}, fmt.Errorf("image lacks required capability %#q", capability)
-			}
-		}
 	}
 
 	baseName, err := selectBaseName(subject, test, requirements, options, strategy)
@@ -252,11 +251,11 @@ func newRunner(test projectconfig.ResolvedTest) (testframework.Runner, error) {
 	)
 
 	switch test.Definition.Type {
-	case "tmt":
+	case tmtFramework:
 		runner, err = tmt.New(test.Name, test.Definition.Tmt)
-	case "lisa":
+	case lisaFramework:
 		runner, err = lisa.New(test.Name, test.Definition.Lisa)
-	case "pytest":
+	case pytestFramework:
 		raw := make(map[string]any, len(test.Definition.Pytest))
 		for key, value := range test.Definition.Pytest {
 			raw[key] = value
