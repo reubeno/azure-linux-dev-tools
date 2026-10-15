@@ -107,12 +107,30 @@ Selectors accept either test names or test-group names. Duplicates are run once;
 unknown selectors are errors even when another selector matches. Without
 selectors, associated tests run. An empty selection is an error.
 
-Each invocation uses an isolated directory beneath `<work-dir>/tests/`.
+Each invocation retains an isolated result directory beneath `<work-dir>/tests/`.
+TMT executes from a short, owned `/var/tmp` workspace, so SSH guests do not need
+permission to recreate the developer's home-directory path and SSH control
+sockets stay short. Native state is collected into the result directory before
+the temporary workspace is removed.
 Per-test input manifests record paths and provenance; native reports remain in
 per-test directories, and `results.json` records normalized outcomes. An
 optional aggregate JUnit report includes native cases when available and
 explicit setup/teardown failures. Assertions, execution errors, skips, and
 cancellation remain distinguishable.
+
+TMT results include native per-case outcomes and log paths; aggregated JUnit is
+derived from `execute/results.yaml`, not a synthetic single-case success.
+The plan's native reporting plugins remain intact. `tmt-output.log` retains
+combined output, and `python-environment.txt` records the installed TMT runtime.
+Cancellation gives TMT time to unwind; a bounded, run-specific cleanup handles
+managed guests before the private environment is removed.
+
+Writable framework checkouts and installed environments are private to a run.
+Caller sources are copied, including uncommitted changes, rather than modified
+by tests or editable Python installation. Only verified, content-addressed
+download bytes are reused across runs; changing LKG URLs cannot replace a
+previous run's selected input. Existing `pytest install=none` environments
+remain explicitly caller-managed.
 
 Pytest tests can read the JSON file at `AZLDEV_TEST_INPUTS`, or receive its path
 through `{inputs-path}` in `extra-args`. Existing image placeholders continue

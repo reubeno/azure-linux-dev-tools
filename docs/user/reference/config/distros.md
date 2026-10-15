@@ -94,9 +94,13 @@ does not assume an Azure account, storage endpoint, or cloud QA service.
 Each architecture contains an array of image variants, with at most one entry
 per format (`qcow2`, `raw`, `vhd`, `vhdx`, or `oci`). A location is an HTTP(S)
 download URL, or a `docker://` registry reference for OCI images. Download
-entries may include `sha256` to verify and safely reuse cached bytes. Unpinned
-download URLs are refreshed when resolved; downloaded content digests and OCI
-image identities are recorded with the run. Download time is not build time.
+entries may include `sha256` to verify and safely reuse cached bytes. Downloads
+are published atomically under their verified content digest and given a
+filename matching the configured format, even for extensionless download URLs.
+Unpinned download URLs are refreshed when resolved; downloaded content digests
+and OCI image IDs are recorded with the run. OCI selection captures the exact
+ID returned by the pull, rather than looking up a mutable tag afterwards.
+Download time is not build time.
 Pin registry references with `@sha256:...` when immutable inputs are needed.
 
 Published package lists must describe the complete intended binary output set

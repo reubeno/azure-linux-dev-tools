@@ -81,6 +81,15 @@ VM). It can also run against component packages installed into a supporting VM.
 At least one of `criteria`, `name`, `testcase-name`, or `testcase-names` is
 required.
 
+Local LISA runs use a private framework checkout and environment, with a
+generated admin key removed at the end. RAW, qcow2, VHD, and VHDX disks are
+content-detected and converted privately when necessary. The host needs a
+working system libvirt/QEMU service and `ssh-keygen`. Install the extras
+required by the selected framework revision and test collection; Microsoft's
+collection may need `pip-extras = ["libvirt", "azure"]` even when using QEMU.
+The image must support cloud-init on QEMU: Hyper-V-only telemetry configuration
+can produce a genuine cloud-init error and is not silently disabled by azldev.
+
 ### TMT Fields
 
 The `[tests.<name>.tmt]` subtable identifies an upstream TMT plan. Both test
@@ -93,6 +102,31 @@ prepare step. TMT retains control of discovery, execution, reporting, and finish
 |-------|----------|------|-------------|
 | Source | `source` | table (`git-url`, `ref`) | Git repository containing the plan. Optional; when omitted, the test source must instead be supplied directly with `--source-dir`. When present, `ref` must be a full 40-character hex commit SHA. |
 | Plan | `plan` | string | Absolute TMT plan name to run. Optional; when omitted, tmt discovers and runs every enabled plan it finds (see [TMT Tests & fmf Metadata](../../explanation/tmt-tests.md)). `--execution vm` always requires an explicit plan (via this field or `--plan`), since hardware export is resolved per-plan. |
+| Context | `context` | table of string arrays | Native fmf context dimensions, such as `{ distro = ["azurelinux-4"], arch = ["x86_64"] }`. Applied consistently to plan export and execution. |
+| Pip extras | `pip-extras` | string array | Additional TMT extras, unioned with the provisioner's required extra. |
+| Run arguments | `run-extra-args` | string array | Supported global TMT options before `run`, such as `--show-time`. |
+| Plan arguments | `plan-extra-args` | string array | Supported plan options, such as `--filter`. |
+| Provision arguments | `provision.extra-args` | string array | Supported native provisioner options, such as `--memory 4096` or `--ssh-option`. |
+| Cloud-init commands | `cloud-init-runcmds` | string array | Additional guest first-boot commands for VM tests, before readiness probing. Not host commands. |
+
+Native argument lists are scope-checked. They cannot override azldev's artifact,
+work-directory, report, or execution-strategy selection, or inject another TMT
+step. The older `provision-extra-args` spelling is accepted as an alias;
+do not supply both forms. A configured `provision.how` must agree with the
+framework-independent execution strategy.
+
+VM runs accept RAW, qcow2, VHD, and VHDX inputs. `qemu-img` detects actual
+content; conversion to a private qcow2 occurs only when needed. A declared
+plan user is preserved; otherwise local VM testing uses `azureuser`, rather
+than assuming Azure Linux images allow root SSH. Set a different VM user in
+the plan; SSH strategy uses the common `--ssh-user` option.
+
+VM hosts need QEMU/libvirt, UEFI firmware, a cloud-init ISO tool such as
+`genisoimage`, and permission to use virtualization. Installing TMT's virtual
+extra may also require a C compiler, Python development headers, `pkg-config`,
+and libvirt development files. These are host prerequisites, not guest packages;
+native installation errors remain visible. Host and container strategies do not
+require the VM stack.
 
 For example, define a plan as follows:
 
@@ -115,13 +149,13 @@ and `--execution host` rather than `--provision local`.
 ### Pytest Fields
 
 The `[tests.<name>.pytest]` subtable configures a pytest run. azldev validates
-and consumes these fields: it creates (or reuses) a Python virtual environment,
-optionally installs dependencies, and invokes `python -m pytest` with the
-configured arguments.
+and consumes these fields: it prepares the Python environment according to
+`install` (see below), and invokes `python -m pytest` with the configured
+arguments.
 
 | Field | TOML Key | Type | Required | Description |
 |-------|----------|------|----------|-------------|
-| Working directory | `working-dir` | string | Yes | Directory used as pytest's CWD. Must be a non-empty string. Relative paths are resolved against the config file's directory. |
+| Working directory | `working-dir` | string | Yes | Source project directory, copied into a private runtime before invoking pytest. Must be non-empty. Relative paths are resolved against the config file's directory. |
 | Test paths | `test-paths` | string array | Yes | Test file paths or directories passed to pytest as positional arguments. Must be a non-empty list of non-empty strings. Each entry is glob-expanded (including recursive `**`) relative to `working-dir`. Patterns that match nothing are passed through unchanged so pytest reports the failure. |
 | Extra args | `extra-args` | string array | No | Additional arguments passed to pytest verbatim, after placeholder substitution (see [Placeholders](#placeholders)). |
 | Install mode | `install` | string | No | How dependencies are installed into the venv. One of `pyproject`, `requirements`, or `none` (default). |
@@ -131,9 +165,9 @@ configured arguments.
 
 | Mode | Behavior |
 |------|----------|
-| `pyproject` | Installs the project at `working-dir` in editable mode (`pip install -e <working-dir>`). Errors if `pyproject.toml` is not present. |
-| `requirements` | Installs from `<working-dir>/requirements.txt`. Errors if the file is not present. |
-| `none` (default) | Skips dependency installation entirely. The venv must already contain pytest and its dependencies (pytest is invoked as the venv interpreter's `-m pytest`, not from `PATH`). |
+| `pyproject` | Installs a private copy of the project in editable mode. Errors if `pyproject.toml` is not present. |
+| `requirements` | Installs from the private source copy's `requirements.txt`. Errors if the file is not present. |
+| `none` (default) | Uses the existing caller-prepared environment at its established location, without creating or changing it. The error identifies the required location when missing. Both a valid venv and importable pytest are required; there is no fallback to host Python. |
 
 `--junit-xml` output requested via `azldev image test --junit-xml <path>` is
 appended automatically; do not add it to `extra-args`. Relative CLI paths, including `--junit-xml`, are resolved against the selected

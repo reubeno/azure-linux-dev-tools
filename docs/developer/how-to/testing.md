@@ -59,6 +59,52 @@ container. Only the resolved source revision and checked qcow2 are written to a
 host artifact mount. The privileged container is restricted to this
 image-construction test; ordinary scenario and e2e containers remain unchanged.
 
+### External test-framework contracts
+
+The artifact-test execution path keeps these responsibilities separate:
+
+| Package | Responsibility |
+| --- | --- |
+| Component/image commands | Select the subject and expose CLI options; invoke normal build services when requested. |
+| `core/testexecution` | Plan selected tests, resolve inputs independently, invoke adapters, and persist combined results. |
+| `core/artifacts` / `artifact` | Resolve local, explicit, or published inputs; retain provenance and builder-owned output records. |
+| `testframework` | Shared execution, requirements, typed input, and result contracts; no framework installation logic. |
+| `testsource` / `utils/pythonenv` | Prepare private source snapshots and managed Python environments. |
+| `tmt`, `lisa`, `pytest` | Own native commands, framework setup, provisioning details, and native report interpretation. |
+
+Do not move framework-specific flags or provisioning workarounds into command
+packages, or make generic utilities depend on test orchestration.
+
+Keep fast CLI/configuration scenarios separate from privileged VM integration.
+Upstream work in [microsoft/azure-linux-dev-tools#381](https://github.com/microsoft/azure-linux-dev-tools/pull/381)
+and [microsoft/azure-linux-dev-tools#382](https://github.com/microsoft/azure-linux-dev-tools/pull/382)
+provides image-building and virtual TMT fixtures. Reuse that infrastructure rather
+than creating a second container harness. The TMT fixture is quarantined in its
+original branch; a green default E2E suite does not mean that fixture ran.
+
+Runtime pins live in `internal/tmt/requirements.txt`, aligned with the shared-pin
+approach in [microsoft/azure-linux-dev-tools#384](https://github.com/microsoft/azure-linux-dev-tools/pull/384).
+An integration harness must use the binary under review and these constraints,
+not a separately built older implementation. Runtime environments are ephemeral;
+verify `python-environment.txt` instead of depending on private venv paths.
+
+Useful live checks include candidate package identity and behavior, unchanged
+input files, guest cleanup on failure/cancellation, mixed-framework selection,
+and per-case reports. Run host-mode tests only inside disposable systems.
+For SSH testing, verify the caller-owned target remains reachable afterwards.
+
+Measure framework setup, guest provisioning, native test execution, and cleanup
+separately. For example, pinned TMT's default SSH-master polling introduced
+four 30-second waits in a trivial SSH probe; one-second polling preserves the
+deadline while avoiding that latency. Testcloud's readiness service is distinct
+from SSH and needs TCP 10022 available in a firewalld-managed guest.
+
+A QEMU fixture must not depend on Hyper-V-only telemetry. A cloud image enabling
+`reporting.telemetry.type: hyperv` can make cloud-init return degraded status on
+QEMU even though SSH works. Build or explicitly customize a separate fixture
+with a suitable reporting backend; do not suppress cloud-init failures or change
+the user's original artifact to make an integration test green.
+
 ## Mutation Testing
 
 Mutation testing measures how good the tests actually are (as opposed to mere line coverage) by

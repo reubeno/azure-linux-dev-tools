@@ -38,6 +38,15 @@ logged without claiming freshness. Use `--test` for a test/group selector and
 `--junit-xml` for an aggregated report. LISA uses VM execution, TMT supports VM
 and container image tests, and pytest inspects artifacts from the host.
 
+VM adapters detect disk contents and privately convert RAW, VHD, and VHDX
+inputs to qcow2 when necessary; they do not rewrite the input artifact.
+Framework checkouts and managed Python environments are private per run.
+`pytest install=none` instead requires an existing caller-prepared environment.
+Inspect retained native logs and per-case JUnit when a test fails; for TMT,
+`python-environment.txt` records runtime versions and `tmt-output.log` captures
+combined output. A QEMU image must have working cloud-init; Hyper-V-specific
+reporting can make an otherwise reachable guest fail LISA provisioning.
+
 Published images live under
 `[distros.<distro>.versions.<version>.images.<name>.architectures]`, independently
 of local image recipes. Each architecture contains `{ format, uri }` entries

@@ -49,6 +49,13 @@ TMT supports `--execution vm`, `container`, `ssh`, or `host`; host/SSH execution
 may modify the target and must only be used on designated test systems.
 LISA uses a VM; pytest inspects candidate files via `AZLDEV_TEST_INPUTS`.
 
+Source overrides are copied into private runtimes, not edited in place.
+TMT retains per-case results, `tmt-output.log`, and `python-environment.txt`
+under the selected work directory; do not depend on temporary venv paths.
+VM inputs may be RAW, qcow2, VHD, or VHDX; conversion never modifies the original.
+Use TMT `context` for fmf adjustments and `cloud-init-runcmds` for guest VM hooks.
+Native extra arguments are scope-checked and cannot override managed inputs.
+
 Finalize with `azldev comp update -p <name>` before opening a PR (see the
 `azldev-update-component` skill).
 

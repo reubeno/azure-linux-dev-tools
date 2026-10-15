@@ -134,11 +134,15 @@ func TestSkillsDocumentArtifactTestDefaults(t *testing.T) {
 		assert.Contains(t, component, "Component tests reuse local RPMs")
 		assert.Contains(t, component, "--rebuild-base-image")
 		assert.Contains(t, component, "AZLDEV_TEST_INPUTS")
+		assert.Contains(t, component, "Source overrides are copied into private runtimes")
+		assert.Contains(t, component, "python-environment.txt")
 
 		image, err := catalog.SkillDocument("azldev-image", testParams())
 		require.NoError(t, err)
 		assert.Contains(t, image, "--artifact-source lkg")
 		assert.Contains(t, image, "Artifact age is")
+		assert.Contains(t, image, "privately convert RAW, VHD, and VHDX")
+		assert.Contains(t, image, "pytest install=none")
 	}
 }
 
