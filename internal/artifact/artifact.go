@@ -5,11 +5,25 @@
 package artifact
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+// ParseContainerImageID normalizes a single immutable image ID returned by Podman.
+func ParseContainerImageID(output string) (string, error) {
+	digest := strings.TrimPrefix(strings.TrimSpace(output), "sha256:")
+
+	decoded, err := hex.DecodeString(digest)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", fmt.Errorf("expected a single SHA-256 container image ID, got %#q", output)
+	}
+
+	return "sha256:" + strings.ToLower(digest), nil
+}
 
 // ValidateName validates an identity used as one managed directory component.
 func ValidateName(name string) error {

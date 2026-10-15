@@ -20,7 +20,6 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/downloader"
-	"github.com/microsoft/azure-linux-dev-tools/internal/utils/externalcmd"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/prereqs"
 )
@@ -436,22 +435,27 @@ func (r *Resolver) pullContainer(reference, arch string) (Artifact, error) {
 		ociArch = "arm64"
 	}
 
-	if err := externalcmd.Run(r.Env, "", "podman", "pull", "--arch", ociArch, reference); err != nil {
-		return Artifact{}, fmt.Errorf("pull container:\n%w", err)
-	}
+	// Capture this pull's immutable ID. Inspecting the tag afterwards could
+	// select a different image if another run updates the same tag.
+	raw := exec.CommandContext(r.Env, "podman", "pull", "--quiet", "--arch", ociArch, reference)
 
-	cmd, err := r.Env.Command(exec.CommandContext(r.Env, "podman", "image", "inspect", "--format", "{{.Id}}", reference))
+	var stderr strings.Builder
+
+	raw.Stderr = &stderr
+
+	cmd, err := r.Env.Command(raw)
 	if err != nil {
 		return Artifact{}, fmt.Errorf("pull container:\n%w", err)
 	}
 
 	identity, err := cmd.RunAndGetOutput(r.Env)
 	if err != nil {
-		return Artifact{}, fmt.Errorf("pull container:\n%w", err)
+		return Artifact{}, fmt.Errorf("pull container (%s):\n%w", strings.TrimSpace(stderr.String()), err)
 	}
 
-	if identity == "" {
-		return Artifact{}, errors.New("podman did not return a container image identity")
+	identity, err = artifact.ParseContainerImageID(identity)
+	if err != nil {
+		return Artifact{}, fmt.Errorf("read pulled container identity:\n%w", err)
 	}
 
 	result.Path = identity
