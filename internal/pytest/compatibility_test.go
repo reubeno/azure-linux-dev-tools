@@ -6,8 +6,10 @@ package pytest_test
 import (
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/testctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/pytest"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
@@ -26,6 +28,18 @@ func newPreparedContext(t *testing.T) *testctx.TestCtx {
 	write(t, ctx, "/project-work/pytest-venv/smoke/pyvenv.cfg", "home = /python")
 
 	return ctx
+}
+
+func TestOCIIdentityCannotMasqueradeAsAnImagePath(t *testing.T) {
+	ctx := newPreparedContext(t)
+	ctx.DryRunValue = true
+	runner, err := pytest.New("smoke", map[string]any{"extra-args": []string{"--image={image-path}"}})
+	require.NoError(t, err)
+
+	req := request()
+	req.Image = &artifact.Artifact{OCIImageID: "sha256:" + strings.Repeat("a", 64), Format: "oci"}
+	_, err = runner.Run(ctx, req)
+	require.ErrorContains(t, err, "requires a file artifact")
 }
 
 func TestMainPreparedEnvironmentRemainsUsable(t *testing.T) {

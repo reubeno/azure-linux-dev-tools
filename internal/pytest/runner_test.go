@@ -32,7 +32,7 @@ const (
 func request() testframework.RunRequest {
 	return testframework.RunRequest{
 		Execution:   testframework.ExecutionSpec{Strategy: testframework.Host},
-		SubjectName: "curl", WorkDir: "/work/smoke", CacheDir: "/cache",
+		SubjectName: "curl", WorkDir: "/work/smoke",
 		PreparedPythonDir: "/project-work/pytest-venv/smoke",
 		Image:             &artifact.Artifact{Path: "/images/base.raw", Format: "raw"}, InputsPath: "/work/inputs.json",
 		JUnitPath: "/reports/smoke.xml", Packages: []artifact.Artifact{{Path: "/rpms/curl.rpm", Format: "rpm"}},
@@ -526,7 +526,7 @@ func TestProjectRootWithNestedCacheKeepsCallerContentsUnchanged(t *testing.T) {
 				const root = "/fixture"
 
 				req := request()
-				req.CacheDir = root + "/build/work/test-cache"
+				callerCache := root + "/build/work/test-cache"
 				req.PreparedPythonDir = root + "/build/work/pytest-venv/smoke"
 				req.WorkDir = root + "/build/work/output"
 				req.JUnitPath = "/reports/smoke.xml"
@@ -542,9 +542,9 @@ func TestProjectRootWithNestedCacheKeepsCallerContentsUnchanged(t *testing.T) {
 				}
 
 				originals := map[string]string{
-					root + "/pyproject.toml":   "original project",
-					root + "/test_example.py":  "original test",
-					req.CacheDir + "/keep.txt": "caller cache",
+					root + "/pyproject.toml":  "original project",
+					root + "/test_example.py": "original test",
+					callerCache + "/keep.txt": "caller cache",
 				}
 
 				preparedDir := req.PreparedPythonDir

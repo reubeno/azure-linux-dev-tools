@@ -75,8 +75,7 @@ func executionFor(test projectconfig.ResolvedTest, options Options, strategy str
 	}
 
 	if execution.Strategy != testframework.SSH {
-		execution.SSHHost, execution.SSHUser, execution.SSHKey = "", "", ""
-		execution.SSHPort = 0
+		execution.SSH = testframework.SSHConnection{}
 	}
 
 	return execution

@@ -51,6 +51,8 @@ TMT VM plans currently support one provision phase; multi-guest plans are
 rejected rather than silently changing guest requirements. All-skipped runs
 are reported as skipped by every framework; collecting zero cases is an error.
 Normalized cases retain native statuses, and reporting/cleanup failures remain errors.
+File inputs are private, read-only snapshots; manifests retain their original
+paths and hashes after cleanup. OCI store images use `ociImageId`, not `path`.
 
 Published images live under
 `[distros.<distro>.versions.<version>.images.<name>.architectures]`, independently

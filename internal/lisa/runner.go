@@ -36,6 +36,10 @@ func (r *Runner) Requirements(spec testframework.ExecutionSpec) (testframework.R
 			fmt.Errorf("LISA supports only the 'vm' execution strategy, not %#q", spec.Strategy)
 	}
 
+	if spec.SourceDir != "" || spec.Plan != "" {
+		return testframework.Requirements{}, errors.New("LISA does not consume test-source or TMT-plan overrides")
+	}
+
 	if r.config.Source == nil && spec.FrameworkDir == "" {
 		return testframework.Requirements{}, errors.New("LISA requires a pinned framework source or framework directory")
 	}
@@ -249,8 +253,12 @@ func nativeExitStatus(runErr error, cases []testframework.CaseResult) testframew
 }
 
 func validateRequest(request testframework.RunRequest) error {
-	if !filepath.IsAbs(request.WorkDir) || !filepath.IsAbs(request.CacheDir) || !filepath.IsAbs(request.JUnitPath) {
-		return errors.New("LISA requires absolute work, cache, and JUnit paths")
+	if err := request.ValidateInputs(); err != nil {
+		return fmt.Errorf("LISA inputs:\n%w", err)
+	}
+
+	if !filepath.IsAbs(request.WorkDir) || !filepath.IsAbs(request.JUnitPath) {
+		return errors.New("LISA requires absolute work and JUnit paths")
 	}
 
 	if !filepath.IsAbs(request.ImagePath()) || request.Image == nil ||

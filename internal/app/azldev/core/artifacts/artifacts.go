@@ -419,7 +419,7 @@ func HumanAge(age time.Duration) string {
 }
 
 func (r *Resolver) pullContainer(reference, arch string) (Artifact, error) {
-	result := Artifact{Path: reference, URI: "docker://" + reference, Source: "lkg", Format: "oci", Arch: arch}
+	result := Artifact{URI: "docker://" + reference, Source: "lkg", Format: "oci", Arch: arch}
 	if r.Env.DryRun() {
 		slog.Info("Would pull container image", "reference", reference, "arch", arch)
 
@@ -458,7 +458,7 @@ func (r *Resolver) pullContainer(reference, arch string) (Artifact, error) {
 		return Artifact{}, fmt.Errorf("read pulled container identity:\n%w", err)
 	}
 
-	result.Path = identity
+	result.OCIImageID = identity
 	slog.Info("Resolved LKG container", "reference", reference, "identity", identity, "build-age", "unknown")
 
 	return result, nil

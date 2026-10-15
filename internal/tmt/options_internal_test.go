@@ -206,7 +206,7 @@ func TestConfiguredProvisionerRequiresMatchingStrategy(t *testing.T) {
 			} {
 				execution := testframework.ExecutionSpec{Strategy: strategy, SourceDir: "/source", Plan: "/smoke"}
 				if strategy == testframework.SSH {
-					execution.SSHHost, execution.SSHUser = "machine", "tester"
+					execution.SSH.Host, execution.SSH.User = "machine", "tester"
 				}
 
 				_, err := runner.Requirements(execution)

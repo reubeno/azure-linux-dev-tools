@@ -55,13 +55,13 @@ func (r *Runner) runArgs(
 		args = append(args, "--image", imageArgument)
 		args = append(args, "--network-prefix", "azldev-"+cachekey.From(request.WorkDir)[:16])
 	case testframework.SSH:
-		args = append(args, "--guest", request.Execution.SSHHost, "--user", request.Execution.SSHUser)
-		if request.Execution.SSHKey != "" {
-			args = append(args, "--key", request.Execution.SSHKey)
+		args = append(args, "--guest", request.Execution.SSH.Host, "--user", request.Execution.SSH.User)
+		if request.Execution.SSH.KeyPath != "" {
+			args = append(args, "--key", request.Execution.SSH.KeyPath)
 		}
 
-		if request.Execution.SSHPort != 0 {
-			args = append(args, "--port", strconv.Itoa(request.Execution.SSHPort))
+		if request.Execution.SSH.Port != 0 {
+			args = append(args, "--port", strconv.Itoa(request.Execution.SSH.Port))
 		}
 	case testframework.Host:
 	}

@@ -26,7 +26,7 @@ import (
 func request() testframework.RunRequest {
 	return testframework.RunRequest{
 		Execution:   testframework.ExecutionSpec{Strategy: testframework.VM, FrameworkDir: "/checkout"},
-		SubjectName: "curl", WorkDir: "/work/smoke", CacheDir: "/cache",
+		SubjectName: "curl", WorkDir: "/work/smoke",
 		Image: &artifact.Artifact{Path: "/images/base.qcow2", Format: "qcow2"}, InputsPath: "/work/inputs.json",
 		JUnitPath: "/reports/smoke.xml", Capabilities: []string{"bootable", "ssh"},
 		Properties: map[string]string{"arch": "aarch64"},

@@ -75,7 +75,7 @@ func (o Options) baseSelection() artifacts.Selection {
 func (o Options) execution(strategy testframework.Strategy) testframework.ExecutionSpec {
 	return testframework.ExecutionSpec{
 		Strategy: strategy, SourceDir: o.SourceDir, FrameworkDir: o.LisaDir, Plan: o.Plan,
-		SSHHost: o.SSHHost, SSHUser: o.SSHUser, SSHKey: o.SSHKey, SSHPort: o.SSHPort,
+		SSH: testframework.SSHConnection{Host: o.SSHHost, User: o.SSHUser, KeyPath: o.SSHKey, Port: o.SSHPort},
 	}
 }
 

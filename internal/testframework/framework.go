@@ -7,7 +7,10 @@ package testframework
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
@@ -25,30 +28,46 @@ const (
 
 // ExecutionSpec selects an environment and optional developer source overrides.
 type ExecutionSpec struct {
-	Strategy     Strategy `json:"strategy"`
-	SourceDir    string   `json:"sourceDir,omitempty"`
-	FrameworkDir string   `json:"frameworkDir,omitempty"`
-	Plan         string   `json:"plan,omitempty"`
-	SSHHost      string   `json:"sshHost,omitempty"`
-	SSHUser      string   `json:"sshUser,omitempty"`
-	SSHKey       string   `json:"sshKey,omitempty"`
-	SSHPort      int      `json:"sshPort,omitempty"`
+	Strategy     Strategy      `json:"strategy"`
+	SourceDir    string        `json:"sourceDir,omitempty"`
+	FrameworkDir string        `json:"frameworkDir,omitempty"`
+	Plan         string        `json:"plan,omitempty"`
+	SSH          SSHConnection `json:"ssh,omitzero"`
+}
+
+// SSHConnection identifies a caller-owned target; adapters must not destroy it.
+type SSHConnection struct {
+	Host    string `json:"host,omitempty"`
+	User    string `json:"user,omitempty"`
+	KeyPath string `json:"keyPath,omitempty"`
+	Port    int    `json:"port,omitempty"`
 }
 
 // Validate rejects incomplete or contradictory execution requests.
 func (s ExecutionSpec) Validate() error {
 	switch s.Strategy {
 	case VM, Container, Host:
-		if s.SSHHost != "" || s.SSHUser != "" || s.SSHKey != "" || s.SSHPort != 0 {
+		if s.SSH != (SSHConnection{}) {
 			return errors.New("SSH options require execution strategy 'ssh'")
 		}
 	case SSH:
-		if s.SSHHost == "" || s.SSHUser == "" {
+		if s.SSH.Host == "" || s.SSH.User == "" {
 			return errors.New("execution strategy 'ssh' requires a host and user")
 		}
 
-		if s.SSHPort < 0 || s.SSHPort > 65535 {
+		if s.SSH.Port < 0 || s.SSH.Port > 65535 {
 			return errors.New("SSH port must be between 1 and 65535")
+		}
+
+		for _, option := range []struct{ name, value string }{{"host", s.SSH.Host}, {"user", s.SSH.User}} {
+			if strings.HasPrefix(option.value, "-") || strings.ContainsAny(option.value, "@/\x00") ||
+				strings.ContainsFunc(option.value, unicode.IsSpace) {
+				return fmt.Errorf("invalid SSH %s %#q", option.name, option.value)
+			}
+		}
+
+		if s.SSH.KeyPath != "" && !filepath.IsAbs(s.SSH.KeyPath) {
+			return errors.New("SSH key path must be absolute")
 		}
 	default:
 		return fmt.Errorf("unsupported execution strategy %#q", s.Strategy)
@@ -76,20 +95,40 @@ type RunRequest struct {
 	Capabilities []string
 	Properties   map[string]string
 	WorkDir      string
-	CacheDir     string
 	// PreparedPythonDir is a caller-managed venv used only by pytest 'install=none'.
 	PreparedPythonDir string
 	JUnitPath         string
 	InputsPath        string
 }
 
-// ImagePath returns the native file or image handle while retaining its metadata in Image.
+// ImagePath returns the image's local file path, never an OCI image identity.
 func (r RunRequest) ImagePath() string {
 	if r.Image == nil {
 		return ""
 	}
 
 	return r.Image.Path
+}
+
+// ValidateInputs checks materialized locations without acquiring or changing artifacts.
+func (r RunRequest) ValidateInputs() error {
+	if r.Image != nil {
+		if err := r.Image.ValidateLocation(); err != nil {
+			return fmt.Errorf("image path or identity:\n%w", err)
+		}
+	}
+
+	for index, pkg := range r.Packages {
+		if pkg.Format != "rpm" || pkg.OCIImageID != "" {
+			return fmt.Errorf("candidate package %d must be an RPM file", index)
+		}
+
+		if err := pkg.ValidateLocation(); err != nil {
+			return fmt.Errorf("candidate RPM path %d:\n%w", index, err)
+		}
+	}
+
+	return nil
 }
 
 // RPMPaths returns the native package arguments without discarding their provenance.

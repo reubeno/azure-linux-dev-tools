@@ -141,6 +141,10 @@ func (r *Runner) prepareArguments(ctx opctx.Ctx, request testframework.RunReques
 	}
 
 	imageArgument := request.ImagePath()
+	if request.Image != nil && request.Image.OCIImageID != "" {
+		imageArgument = request.Image.OCIImageID
+	}
+
 	if request.Execution.Strategy == testframework.VM {
 		imageArgument, err = qemu.EnsureQcow2(ctx, imageArgument,
 			filepath.Join(filepath.Dir(outputDir), "image.qcow2"))
@@ -167,21 +171,20 @@ func (r *Runner) validateRequest(request testframework.RunRequest) error {
 		return err
 	}
 
+	if err := request.ValidateInputs(); err != nil {
+		return fmt.Errorf("TMT inputs:\n%w", err)
+	}
+
 	if request.JUnitPath != "" && !filepath.IsAbs(request.JUnitPath) {
 		return errors.New("TMT JUnit path must be absolute")
 	}
 
-	for _, directory := range []struct{ name, path string }{
-		{"work", request.WorkDir}, {"cache", request.CacheDir},
-	} {
-		if !filepath.IsAbs(directory.path) {
-			return fmt.Errorf("TMT %s directory must be absolute", directory.name)
-		}
+	if !filepath.IsAbs(request.WorkDir) {
+		return errors.New("TMT work directory must be absolute")
+	}
 
-		if directory.name == "work" && request.Execution.SourceDir != "" &&
-			dirsOverlap(request.Execution.SourceDir, directory.path) {
-			return fmt.Errorf("TMT source and %s directories must not overlap", directory.name)
-		}
+	if request.Execution.SourceDir != "" && dirsOverlap(request.Execution.SourceDir, request.WorkDir) {
+		return errors.New("TMT source and work directories must not overlap")
 	}
 
 	if err := validateImage(request, requirements); err != nil {
@@ -211,8 +214,7 @@ func validateImage(request testframework.RunRequest, requirements testframework.
 			request.Execution.Strategy, request.Image.Format)
 	}
 
-	if !filepath.IsAbs(request.ImagePath()) &&
-		(request.Execution.Strategy != testframework.Container || !isContainerImageID(request.ImagePath())) {
+	if request.Image == nil || (request.Image.OCIImageID == "" && !filepath.IsAbs(request.ImagePath())) {
 		return errors.New("TMT image path must be absolute, or a local image ID for strategy 'container'")
 	}
 
@@ -225,8 +227,8 @@ func validateFiles(ctx opctx.Ctx, request testframework.RunRequest) error {
 		paths = append(paths, request.ImagePath())
 	}
 
-	if request.Execution.SSHKey != "" {
-		paths = append(paths, request.Execution.SSHKey)
+	if request.Execution.SSH.KeyPath != "" {
+		paths = append(paths, request.Execution.SSH.KeyPath)
 	}
 
 	for _, path := range paths {
@@ -354,12 +356,6 @@ func importContainerImage(ctx opctx.Ctx, imagePath string) (string, error) {
 	}
 
 	return image, nil
-}
-
-func isContainerImageID(image string) bool {
-	normalized, err := artifact.ParseContainerImageID(image)
-
-	return err == nil && normalized == image
 }
 
 func dirsOverlap(first, second string) bool {

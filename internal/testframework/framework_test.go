@@ -20,20 +20,23 @@ func TestExecutionValidation(t *testing.T) {
 		{testframework.ExecutionSpec{Strategy: testframework.VM}, true},
 		{testframework.ExecutionSpec{Strategy: testframework.Container}, true},
 		{testframework.ExecutionSpec{Strategy: testframework.Host}, true},
-		{testframework.ExecutionSpec{Strategy: testframework.SSH, SSHHost: "guest", SSHUser: "tester"}, true},
-		{testframework.ExecutionSpec{Strategy: testframework.SSH}, false},
-		{testframework.ExecutionSpec{Strategy: testframework.SSH, SSHHost: "guest"}, false},
-		{testframework.ExecutionSpec{Strategy: testframework.SSH, SSHUser: "tester"}, false},
 		{testframework.ExecutionSpec{
-			Strategy: testframework.SSH, SSHHost: "guest", SSHUser: "tester", SSHPort: 65535,
+			Strategy: testframework.SSH,
+			SSH:      testframework.SSHConnection{Host: "guest", User: "tester"},
+		}, true},
+		{testframework.ExecutionSpec{Strategy: testframework.SSH}, false},
+		{testframework.ExecutionSpec{Strategy: testframework.SSH, SSH: testframework.SSHConnection{Host: "guest"}}, false},
+		{testframework.ExecutionSpec{Strategy: testframework.SSH, SSH: testframework.SSHConnection{User: "tester"}}, false},
+		{testframework.ExecutionSpec{
+			Strategy: testframework.SSH, SSH: testframework.SSHConnection{Host: "guest", User: "tester", Port: 65535},
 		}, true},
 		{testframework.ExecutionSpec{
-			Strategy: testframework.SSH, SSHHost: "guest", SSHUser: "tester", SSHPort: -1,
+			Strategy: testframework.SSH, SSH: testframework.SSHConnection{Host: "guest", User: "tester", Port: -1},
 		}, false},
 		{testframework.ExecutionSpec{
-			Strategy: testframework.SSH, SSHHost: "guest", SSHUser: "tester", SSHPort: 65536,
+			Strategy: testframework.SSH, SSH: testframework.SSHConnection{Host: "guest", User: "tester", Port: 65536},
 		}, false},
-		{testframework.ExecutionSpec{Strategy: testframework.VM, SSHHost: "guest"}, false},
+		{testframework.ExecutionSpec{Strategy: testframework.VM, SSH: testframework.SSHConnection{Host: "guest"}}, false},
 		{testframework.ExecutionSpec{Strategy: "unknown"}, false},
 	}
 	for _, test := range tests {

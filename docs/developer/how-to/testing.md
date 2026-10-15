@@ -79,6 +79,16 @@ Adapters return an explicit status/error pair checked by
 failed outcomes wrap `ErrTestFailed`, and infrastructure/cancellation outcomes
 carry an error. The orchestrator preserves this classification rather than
 reinterpreting framework exit codes or treating an unspecified status as success.
+`ExecutionSpec.SSH` groups caller-owned connection settings. `RunRequest` has
+no generic cache directory: only pytest's opt-out install mode consumes the
+explicit caller-owned `PreparedPythonDir`. File artifacts and OCI image IDs
+have distinct fields; materialized inputs cannot contain both.
+
+The orchestrator owns per-invocation file snapshots and releases them after
+native execution. Snapshots are read-only copies with digests, not hardlinks
+to mutable build output. Acquisition, snapshot, and cleanup failures must reach
+the returned results and reports. Native adapters never choose whether to build
+or download an input.
 
 Keep fast CLI/configuration scenarios separate from privileged VM integration.
 Upstream work in [microsoft/azure-linux-dev-tools#381](https://github.com/microsoft/azure-linux-dev-tools/pull/381)

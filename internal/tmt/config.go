@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"unicode"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
@@ -165,22 +164,6 @@ func (r *Runner) validateExecution(execution testframework.ExecutionSpec) error 
 
 	if err := r.config.validateStrategy(execution.Strategy); err != nil {
 		return err
-	}
-
-	if execution.Strategy == testframework.SSH {
-		for _, option := range []struct{ name, value string }{
-			{"host", execution.SSHHost}, {"user", execution.SSHUser},
-		} {
-			if strings.HasPrefix(option.value, "-") ||
-				strings.ContainsAny(option.value, "@/\x00") ||
-				strings.ContainsFunc(option.value, unicode.IsSpace) {
-				return fmt.Errorf("invalid SSH %s %#q", option.name, option.value)
-			}
-		}
-
-		if execution.SSHKey != "" && !filepath.IsAbs(execution.SSHKey) {
-			return errors.New("SSH key path must be absolute")
-		}
 	}
 
 	return nil

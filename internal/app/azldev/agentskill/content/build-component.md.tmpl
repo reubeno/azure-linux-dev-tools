@@ -58,6 +58,8 @@ Native extra arguments are scope-checked and cannot override managed inputs.
 TMT VM plans must have at most one provision phase. All-skipped runs are skipped;
 reporting or cleanup failures remain errors even if tests also failed.
 Every adapter reports normalized cases; collecting zero cases is an error.
+Candidate files are snapshotted read-only per invocation; inspect `originalPath`
+and `sha256` in the input manifest for provenance after snapshot cleanup.
 Pytest `install=none` uses `{{ .WorkDir }}/pytest-venv/<test-name>` without installing dependencies.
 
 Finalize with `azldev comp update -p <name>` before opening a PR (see the

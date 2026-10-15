@@ -109,6 +109,10 @@ func (r *Runner) Requirements(spec testframework.ExecutionSpec) (testframework.R
 			fmt.Errorf("pytest supports only the 'host' execution strategy, not %#q", spec.Strategy)
 	}
 
+	if spec.FrameworkDir != "" || spec.Plan != "" {
+		return testframework.Requirements{}, errors.New("pytest does not consume LISA-framework or TMT-plan overrides")
+	}
+
 	return testframework.Requirements{
 		PackagesSupported: true, ImageFormats: []string{"qcow2", "raw", "vhd", "vhdx", "oci"},
 	}, nil
@@ -161,6 +165,22 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (result te
 }
 
 func (r *Runner) validateRequest(request testframework.RunRequest) error {
+	if err := request.ValidateInputs(); err != nil {
+		return fmt.Errorf("pytest inputs:\n%w", err)
+	}
+
+	if request.Image != nil && request.Image.OCIImageID != "" {
+		if request.InputsPath == "" {
+			return errors.New("pytest OCI image tests require an inputs manifest")
+		}
+
+		for _, arg := range r.config.ExtraArgs {
+			if strings.Contains(arg, "{image-path}") {
+				return errors.New("'{image-path}' requires a file artifact; read 'ociImageId' from the inputs manifest instead")
+			}
+		}
+	}
+
 	if !filepath.IsAbs(request.WorkDir) {
 		return errors.New("pytest requires an absolute work directory")
 	}
@@ -169,7 +189,7 @@ func (r *Runner) validateRequest(request testframework.RunRequest) error {
 		return errors.New("pytest 'install=none' requires an absolute caller-prepared environment directory")
 	}
 
-	if request.JUnitPath != "" && !filepath.IsAbs(request.JUnitPath) {
+	if !filepath.IsAbs(request.JUnitPath) {
 		return errors.New("pytest JUnit path must be absolute")
 	}
 

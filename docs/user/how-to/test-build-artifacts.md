@@ -13,6 +13,14 @@ build. Build records retain exact output membership and timestamps; the log
 reports artifact age, not a claim that the artifact matches current sources.
 Legacy files without build timestamps are identified by modification age.
 
+Before execution, selected files are copied into private, read-only snapshots
+and hashed. A concurrent rebuild cannot replace an active run's input; changes
+detected while copying are errors rather than a mixed-version test. Snapshots
+are not hardlinks and are removed after execution. Manifests retain `originalPath`
+and `sha256` so the consumed bytes can be identified afterwards. This protects
+normal build/test concurrency and accidental writes, not hostile code running
+with the same user privileges.
+
 ```sh
 azldev component test curl
 azldev component test curl --rebuild
@@ -147,6 +155,9 @@ Pytest tests can read the JSON file at `AZLDEV_TEST_INPUTS`, or receive its path
 through `{inputs-path}` in `extra-args`. Existing image placeholders continue
 to work. The manifest has `subject`, `kind`, and `inputs` fields; `inputs.image`
 describes an image when applicable and `inputs.packages` lists candidate RPMs.
+File artifacts have `path`; container-store images have `ociImageId` instead.
+Those locations are mutually exclusive. Pytest tests using an OCI identity
+must read it from the manifest; `{image-path}` is only valid for file artifacts.
 
 Relative CLI paths resolve against the selected project directory (`-C`).
 `--work-dir` chooses the root for run output. The default is the project's work

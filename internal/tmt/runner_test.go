@@ -31,7 +31,6 @@ var pinnedRequirements []byte
 const (
 	sourceDir  = "/source"
 	workDir    = "/work/run"
-	cacheDir   = "/cache"
 	planName   = "/plans/smoke"
 	imageID    = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	tmtProgram = "tmt"
@@ -124,34 +123,34 @@ func TestRequirementsRejectInvalidExecution(t *testing.T) {
 		{"relative plan", func(e *testframework.ExecutionSpec) { e.Plan = "plan" }, "absolute plan"},
 		{"missing VM plan", func(e *testframework.ExecutionSpec) { e.Plan = "" }, "required"},
 		{"framework override", func(e *testframework.ExecutionSpec) { e.FrameworkDir = "/framework" }, "not supported"},
-		{"SSH options on VM", func(e *testframework.ExecutionSpec) { e.SSHHost = "host" }, "require execution strategy"},
+		{"SSH options on VM", func(e *testframework.ExecutionSpec) { e.SSH.Host = "host" }, "require execution strategy"},
 		{"SSH missing host", func(e *testframework.ExecutionSpec) {
 			*e = executionFor(testframework.SSH)
-			e.SSHHost = ""
+			e.SSH.Host = ""
 		}, "requires a host and user"},
 		{"SSH missing user", func(e *testframework.ExecutionSpec) {
 			*e = executionFor(testframework.SSH)
-			e.SSHUser = ""
+			e.SSH.User = ""
 		}, "requires a host and user"},
 		{"SSH invalid host", func(e *testframework.ExecutionSpec) {
 			*e = executionFor(testframework.SSH)
-			e.SSHHost = "-option"
+			e.SSH.Host = "-option"
 		}, "invalid SSH host"},
 		{"SSH invalid user", func(e *testframework.ExecutionSpec) {
 			*e = executionFor(testframework.SSH)
-			e.SSHUser = "two users"
+			e.SSH.User = "two users"
 		}, "invalid SSH user"},
 		{"SSH negative port", func(e *testframework.ExecutionSpec) {
 			*e = executionFor(testframework.SSH)
-			e.SSHPort = -1
+			e.SSH.Port = -1
 		}, "SSH port"},
 		{"SSH high port", func(e *testframework.ExecutionSpec) {
 			*e = executionFor(testframework.SSH)
-			e.SSHPort = 65536
+			e.SSH.Port = 65536
 		}, "SSH port"},
 		{"SSH relative key", func(e *testframework.ExecutionSpec) {
 			*e = executionFor(testframework.SSH)
-			e.SSHKey = "key"
+			e.SSH.KeyPath = "key"
 		}, "key path must be absolute"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -341,7 +340,7 @@ func TestContainerUsesResolvedLocalImageID(t *testing.T) {
 	require.NoError(t, err)
 
 	request := requestFor(testframework.Container)
-	request.Image = &artifact.Artifact{Path: imageID, Format: "oci"}
+	request.Image = &artifact.Artifact{OCIImageID: imageID, Format: "oci"}
 	ctx.CmdFactory.RunAndGetOutputHandler = func(command *exec.Cmd) (string, error) {
 		if slices.Contains(command.Args, "freeze") {
 			return string(pinnedRequirements), nil
@@ -396,8 +395,8 @@ func TestHostOptionalPlanAndSSHDefaultAuthentication(t *testing.T) {
 
 		request := requestFor(strategy)
 		request.Execution.Plan = ""
-		request.Execution.SSHKey = ""
-		request.Execution.SSHPort = 0
+		request.Execution.SSH.KeyPath = ""
+		request.Execution.SSH.Port = 0
 
 		var actual []string
 
@@ -475,7 +474,6 @@ func TestRunPreflightFailsBeforeProcesses(t *testing.T) {
 		{"work inside source", func(r *testframework.RunRequest) { r.WorkDir = sourceDir + "/work" }, "must not overlap"},
 		{"source inside work", func(r *testframework.RunRequest) { r.WorkDir = "/" }, "must not overlap"},
 		{"relative work", func(r *testframework.RunRequest) { r.WorkDir = "work" }, "work directory must be absolute"},
-		{"relative cache", func(r *testframework.RunRequest) { r.CacheDir = "cache" }, "cache directory must be absolute"},
 		{"relative JUnit", func(r *testframework.RunRequest) { r.JUnitPath = "report.xml" }, "JUnit path must be absolute"},
 		{"missing image", func(r *testframework.RunRequest) { r.Image = nil }, "image path"},
 		{"unresolved container tag", func(r *testframework.RunRequest) {
@@ -661,8 +659,8 @@ func TestPinnedSourceUsesFreshCheckoutAndEnvironment(t *testing.T) {
 func TestSourceContainingProjectCacheUsesIndependentRuntime(t *testing.T) {
 	ctx := newRunContext(t)
 	req := requestFor(testframework.Host)
-	req.CacheDir = sourceDir + "/build/work/test-cache"
-	writeFile(t, ctx, req.CacheDir+"/keep.txt", "caller cache")
+	callerCache := sourceDir + "/build/work/test-cache"
+	writeFile(t, ctx, callerCache+"/keep.txt", "caller cache")
 	before, err := fileutils.Glob(ctx.FS(), sourceDir+"/**/*")
 	require.NoError(t, err)
 
@@ -700,7 +698,7 @@ func TestSourceContainingProjectCacheUsesIndependentRuntime(t *testing.T) {
 
 	for path, original := range map[string]string{
 		sourceDir + "/.fmf/version": "1\n",
-		req.CacheDir + "/keep.txt":  "caller cache",
+		callerCache + "/keep.txt":   "caller cache",
 	} {
 		data, readErr := fileutils.ReadFile(ctx.FS(), path)
 		require.NoError(t, readErr)
@@ -819,10 +817,10 @@ func sourceConfig() map[string]any {
 func executionFor(strategy testframework.Strategy) testframework.ExecutionSpec {
 	execution := testframework.ExecutionSpec{Strategy: strategy, SourceDir: sourceDir, Plan: planName}
 	if strategy == testframework.SSH {
-		execution.SSHHost = "machine.example"
-		execution.SSHUser = "tester"
-		execution.SSHKey = "/keys/id"
-		execution.SSHPort = 2222
+		execution.SSH.Host = "machine.example"
+		execution.SSH.User = "tester"
+		execution.SSH.KeyPath = "/keys/id"
+		execution.SSH.Port = 2222
 	}
 
 	return execution
@@ -830,7 +828,7 @@ func executionFor(strategy testframework.Strategy) testframework.ExecutionSpec {
 
 func requestFor(strategy testframework.Strategy) testframework.RunRequest {
 	request := testframework.RunRequest{
-		Execution: executionFor(strategy), WorkDir: workDir, CacheDir: cacheDir,
+		Execution: executionFor(strategy), WorkDir: workDir,
 	}
 	if strategy == testframework.VM || strategy == testframework.Container {
 		request.Image = &artifact.Artifact{Path: "/images/image", Format: "qcow2"}

@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/artifacts"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testexecution"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testutils"
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
@@ -74,7 +75,12 @@ func TestComponentPytestInputsAndAggregatedJUnit(t *testing.T) {
 	require.NoError(t, fileutils.WriteFile(env.TestFS, "/project/tests/requirements.txt",
 		[]byte("pytest\n"), fileperms.PrivateFile))
 
-	var reportPaths []string
+	var (
+		reportPaths   []string
+		snapshotPaths []string
+	)
+
+	expectedInput := "candidate"
 
 	env.CmdFactory.RunHandler = func(cmd *exec.Cmd) error {
 		if slices.Contains(cmd.Args, "venv") {
@@ -87,6 +93,29 @@ func TestComponentPytestInputsAndAggregatedJUnit(t *testing.T) {
 		}
 
 		if slices.Contains(cmd.Args, "pytest") {
+			for _, entry := range cmd.Env {
+				if strings.HasPrefix(entry, "AZLDEV_TEST_INPUTS=") {
+					data, err := fileutils.ReadFile(env.TestFS, strings.TrimPrefix(entry, "AZLDEV_TEST_INPUTS="))
+					require.NoError(t, err)
+
+					var manifest struct {
+						Inputs struct {
+							Packages []artifact.Artifact `json:"packages"`
+						} `json:"inputs"`
+					}
+					require.NoError(t, json.Unmarshal(data, &manifest))
+					require.Len(t, manifest.Inputs.Packages, 1)
+					pkg := manifest.Inputs.Packages[0]
+					snapshotPaths = append(snapshotPaths, pkg.Path)
+					assert.Equal(t, "/project/pkg.rpm", pkg.OriginalPath)
+					assert.NotEmpty(t, pkg.SHA256)
+					require.NoError(t, fileutils.WriteFile(env.TestFS, "/project/pkg.rpm", []byte("rebuilt"), fileperms.PrivateFile))
+					bytes, err := fileutils.ReadFile(env.TestFS, pkg.Path)
+					require.NoError(t, err)
+					assert.Equal(t, expectedInput, string(bytes))
+				}
+			}
+
 			for index, arg := range cmd.Args {
 				if arg == "--junit-xml" || arg == "--junitxml" {
 					path := cmd.Args[index+1]
@@ -131,6 +160,13 @@ func TestComponentPytestInputsAndAggregatedJUnit(t *testing.T) {
 	assert.Equal(t, "curl", decoded["subject"])
 	assert.Contains(t, string(inputs), "/project/pkg.rpm")
 
+	for _, path := range snapshotPaths {
+		exists, err := fileutils.Exists(env.TestFS, path)
+		require.NoError(t, err)
+		assert.False(t, exists, "temporary input snapshots must be released after results are collected")
+	}
+
+	expectedInput = "rebuilt"
 	successfulHandler := env.CmdFactory.RunHandler
 	env.CmdFactory.RunHandler = func(cmd *exec.Cmd) error {
 		if err := successfulHandler(cmd); err != nil {

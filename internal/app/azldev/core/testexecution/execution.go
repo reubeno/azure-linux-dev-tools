@@ -96,11 +96,6 @@ func Run(env *azldev.Env, subject Subject, tests []projectconfig.ResolvedTest, o
 		return nil, fmt.Errorf("run:\n%w", err)
 	}
 
-	inputs, err := resolveInputs(subject, plans, options, resolver)
-	if err != nil {
-		return nil, fmt.Errorf("run:\n%w", err)
-	}
-
 	runDir := filepath.Join(options.WorkDir, "tests", "dry-run")
 	if !env.DryRun() {
 		root := filepath.Join(options.WorkDir, "tests")
@@ -111,6 +106,19 @@ func Run(env *azldev.Env, subject Subject, tests []projectconfig.ResolvedTest, o
 		runDir, err = fileutils.MkdirTemp(env.FS(), root, "run-")
 		if err != nil {
 			return nil, fmt.Errorf("run:\n%w", err)
+		}
+	}
+
+	inputs, err := resolveInputs(subject, plans, options, resolver)
+	if err != nil {
+		return preparationFailure(env, plans, runDir, options.JUnitXMLPath, err)
+	}
+
+	var cleanup func() error
+	if !env.DryRun() {
+		inputs, cleanup, err = snapshotInputs(env, inputs)
+		if err != nil {
+			return preparationFailure(env, plans, runDir, options.JUnitXMLPath, err)
 		}
 	}
 
@@ -127,12 +135,44 @@ func Run(env *azldev.Env, subject Subject, tests []projectconfig.ResolvedTest, o
 	}
 
 	if !env.DryRun() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			failures = append(failures, cleanupErr)
+			results = append(results, testframework.RunResult{
+				Name: "artifact-cleanup", Framework: "azldev", Status: testframework.Errored,
+				OutputDir: runDir, Error: cleanupErr.Error(),
+			})
+		}
+
 		if err := saveResults(env, runDir, options.JUnitXMLPath, results); err != nil {
 			failures = append(failures, err)
 		}
 	}
 
 	return results, errors.Join(failures...)
+}
+
+func preparationFailure(env *azldev.Env, plans []plannedTest, runDir, junitPath string,
+	failure error,
+) ([]testframework.RunResult, error) {
+	results := make([]testframework.RunResult, 0, len(plans))
+
+	status := testframework.Errored
+	if env.Err() != nil {
+		status = testframework.Cancelled
+	}
+
+	for _, plan := range plans {
+		results = append(results, testframework.RunResult{
+			Name: plan.test.Name, Framework: plan.test.Definition.Type, Strategy: plan.execution.Strategy,
+			Status: status, OutputDir: runDir, Error: failure.Error(),
+		})
+	}
+
+	if !env.DryRun() {
+		failure = errors.Join(failure, saveResults(env, runDir, junitPath, results))
+	}
+
+	return results, failure
 }
 
 func normalizeOptions(env *azldev.Env, options *Options) error {
@@ -414,7 +454,7 @@ func prepareRequest(env *azldev.Env, subject Subject, plan plannedTest, inputs t
 	request := testframework.RunRequest{
 		Execution: plan.execution, SubjectName: subject.Name,
 		Capabilities: subject.Capabilities, Properties: subject.Properties, WorkDir: workDir,
-		CacheDir: filepath.Join(env.WorkDir(), "test-cache"), JUnitPath: filepath.Join(workDir, "junit.xml"),
+		JUnitPath:         filepath.Join(workDir, "junit.xml"),
 		PreparedPythonDir: filepath.Join(env.WorkDir(), "pytest-venv", plan.test.Name),
 		InputsPath:        filepath.Join(workDir, "inputs.json"),
 		Image:             inputs.Image, Packages: inputs.Packages,

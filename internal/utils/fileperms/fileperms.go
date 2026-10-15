@@ -16,6 +16,8 @@ const (
 
 	// File permissions: user read/write.
 	PrivateFile os.FileMode = 0o600
+	// File permissions: user read only.
+	PrivateReadOnlyFile os.FileMode = 0o400
 	// File permissions: user read/write; group and others read.
 	PublicFile os.FileMode = 0o644
 	// File permissions: user read/write/execute; group and others read/execute.
