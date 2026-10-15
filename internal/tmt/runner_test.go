@@ -323,7 +323,7 @@ func TestImageTestsDoNotInsertPreparation(t *testing.T) {
 					actual = command.Args
 				}
 
-				return nil
+				return successfulNativeRun(t, ctx, command)
 			}
 
 			_, err = runner.Run(ctx, request)
@@ -359,7 +359,7 @@ func TestContainerUsesResolvedLocalImageID(t *testing.T) {
 			actual = command.Args
 		}
 
-		return nil
+		return successfulNativeRun(t, ctx, command)
 	}
 	_, err = runner.Run(ctx, request)
 	require.NoError(t, err)
@@ -406,7 +406,7 @@ func TestHostOptionalPlanAndSSHDefaultAuthentication(t *testing.T) {
 				actual = command.Args
 			}
 
-			return nil
+			return successfulNativeRun(t, ctx, command)
 		}
 
 		_, err = runner.Run(ctx, request)
@@ -566,6 +566,12 @@ func TestRunExitClassification(t *testing.T) {
 					_, err := command.Stderr.Write([]byte("native diagnostic"))
 					require.NoError(t, err)
 
+					if test.asserted {
+						native := command.Args[slices.Index(command.Args, "--id")+1]
+						writeResultData(t, ctx.FS(), filepath.Join(native, "plans/smoke/execute/results.yaml"),
+							"- name: /case", "  result: fail")
+					}
+
 					return test.err
 				}
 
@@ -616,7 +622,7 @@ func TestPinnedSourceUsesFreshCheckoutAndEnvironment(t *testing.T) {
 			writeFile(t, ctx, checkout+"/.fmf/version", "1\n")
 		}
 
-		return nil
+		return successfulNativeRun(t, ctx, command)
 	}
 
 	_, err = runner.Run(ctx, request)
@@ -675,7 +681,7 @@ func TestSourceContainingProjectCacheUsesIndependentRuntime(t *testing.T) {
 			writeFile(t, ctx, runSource+"/build/work/test-cache/keep.txt", "private cache mutation")
 		}
 
-		return nil
+		return successfulNativeRun(t, ctx, command)
 	}
 	runner, err := tmt.New("example", nil)
 	require.NoError(t, err)
@@ -743,7 +749,7 @@ func TestRuntimeFailureAndCancellationCleanup(t *testing.T) {
 			assert.Equal(t, "1\n", string(marker))
 
 			ctx.Ctx = t.Context()
-			ctx.CmdFactory.RunHandler = nil
+			ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error { return successfulNativeRun(t, ctx, command) }
 			retry := requestFor(testframework.Host)
 			retry.WorkDir = "/work/retry"
 			result, err = runner.Run(ctx, retry)
@@ -863,8 +869,21 @@ func newRunContext(t *testing.T) *testctx.TestCtx {
 
 		return `[{"name":"/plans/smoke","provision":[]}]`, nil
 	}
+	ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error { return successfulNativeRun(t, ctx, command) }
 
 	return ctx
+}
+
+func successfulNativeRun(t *testing.T, ctx *testctx.TestCtx, command *exec.Cmd) error {
+	t.Helper()
+
+	if filepath.Base(command.Args[0]) == tmtProgram && !slices.Contains(command.Args, "clean") {
+		native := command.Args[slices.Index(command.Args, "--id")+1]
+		writeResultData(t, ctx.FS(), filepath.Join(native, "plans/smoke/execute/results.yaml"),
+			"- name: /case", "  result: pass")
+	}
+
+	return nil
 }
 
 func writeFile(t *testing.T, ctx *testctx.TestCtx, path, content string) {

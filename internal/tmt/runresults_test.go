@@ -72,7 +72,8 @@ func TestRunCollectsNativeOutcomesAndJUnit(t *testing.T) {
 			assert.Equal(t, request.JUnitPath, result.JUnitPath)
 			require.Len(t, result.Cases, 1)
 			assert.Equal(t, "/case", result.Cases[0].Name)
-			assert.Equal(t, test.outcome, result.Cases[0].Status)
+			assert.Equal(t, test.outcome, result.Cases[0].NativeStatus)
+			assert.Equal(t, test.status, result.Cases[0].Status)
 			assert.Equal(t, 3500*time.Millisecond, result.Cases[0].Duration)
 			output, readErr := fileutils.ReadFile(ctx.FS(), result.Cases[0].OutputPath)
 			require.NoError(t, readErr)
@@ -166,7 +167,7 @@ func TestVMUsesTypedArtifactArchitecture(t *testing.T) {
 			args = cmd.Args
 		}
 
-		return nil
+		return successfulNativeRun(t, ctx, cmd)
 	}
 	runner, err := tmt.New("test", nil)
 	require.NoError(t, err)

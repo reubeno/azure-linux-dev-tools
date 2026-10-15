@@ -16,7 +16,6 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/testctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/pytest"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
-	"github.com/microsoft/azure-linux-dev-tools/internal/utils/cachekey"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/stretchr/testify/assert"
@@ -27,13 +26,15 @@ const (
 	pytestModule       = "pytest"
 	installNone        = "none"
 	missingEnvironment = "missing"
+	passedJUnit        = `<testsuite tests="1"><testcase name="test" time="0.25"/></testsuite>`
 )
 
 func request() testframework.RunRequest {
 	return testframework.RunRequest{
 		Execution:   testframework.ExecutionSpec{Strategy: testframework.Host},
 		SubjectName: "curl", WorkDir: "/work/smoke", CacheDir: "/cache",
-		Image: &artifact.Artifact{Path: "/images/base.raw", Format: "raw"}, InputsPath: "/work/inputs.json",
+		PreparedPythonDir: "/project-work/pytest-venv/smoke",
+		Image:             &artifact.Artifact{Path: "/images/base.raw", Format: "raw"}, InputsPath: "/work/inputs.json",
 		JUnitPath: "/reports/smoke.xml", Packages: []artifact.Artifact{{Path: "/rpms/curl.rpm", Format: "rpm"}},
 		Capabilities: []string{"bootable", "ssh"}, Properties: map[string]string{"arch": "aarch64"},
 	}
@@ -45,12 +46,12 @@ func write(t *testing.T, ctx *testctx.TestCtx, path, content string) {
 	require.NoError(t, fileutils.WriteFile(ctx.FS(), path, []byte(content), fileperms.PrivateFile))
 }
 
-func preparedNone(t *testing.T, ctx *testctx.TestCtx, identity string) {
+func preparedNone(t *testing.T, ctx *testctx.TestCtx, _ string) {
 	t.Helper()
 	require.NoError(t, ctx.OSEnv().Chdir("/tests"))
 	require.NoError(t, fileutils.MkdirAll(ctx.FS(), "/tests"))
 
-	dir := filepath.Join("/cache", "python", cachekey.From("pytest", "smoke", identity, installNone))
+	dir := request().PreparedPythonDir
 	write(t, ctx, filepath.Join(dir, "bin/python3"), "caller Python")
 	write(t, ctx, filepath.Join(dir, "pyvenv.cfg"), "caller configuration")
 }
@@ -80,7 +81,7 @@ func TestInvocationAndExpansion(t *testing.T) {
 	ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
 		commands = append(commands, command)
 		if len(command.Args) > 2 && command.Args[2] == pytestModule {
-			write(t, ctx, request().JUnitPath, `<testsuites tests="1"/>`)
+			write(t, ctx, request().JUnitPath, passedJUnit)
 		}
 
 		return nil
@@ -120,8 +121,9 @@ func TestNativeOutcomes(t *testing.T) {
 		failed bool
 	}{
 		{"passed", nil, testframework.Passed, false},
+		{"all-skipped", nil, testframework.Skipped, false},
 		{"assertions", exitError(1), testframework.Failed, true},
-		{"no-tests", exitError(5), testframework.Skipped, false},
+		{"no-tests", exitError(5), testframework.Errored, false},
 		{"interrupt", exitError(2), testframework.Errored, false},
 		{"internal-error", exitError(3), testframework.Errored, false},
 		{"usage", exitError(4), testframework.Errored, false},
@@ -137,7 +139,20 @@ func TestNativeOutcomes(t *testing.T) {
 
 			ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
 				if len(command.Args) > 2 && command.Args[2] == pytestModule {
-					write(t, ctx, request().JUnitPath, `<testsuites/>`)
+					report := passedJUnit
+					if item.failed {
+						report = `<testsuite tests="1" failures="1"><testcase name="test"><failure/></testcase></testsuite>`
+					}
+
+					if item.name == "no-tests" {
+						report = `<testsuites tests="0"/>`
+					}
+
+					if item.name == "all-skipped" {
+						report = `<testsuite tests="1"><testcase name="skip"><skipped/></testcase></testsuite>`
+					}
+
+					write(t, ctx, request().JUnitPath, report)
 
 					if item.err != nil {
 						_, _ = command.Stderr.Write([]byte("diagnostic"))
@@ -278,7 +293,7 @@ func TestPinnedSourceAndLocalOverride(t *testing.T) {
 	ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
 		commands = append(commands, command)
 		if len(command.Args) > 2 && command.Args[2] == pytestModule {
-			write(t, ctx, req.JUnitPath, `<testsuites tests="1"/>`)
+			write(t, ctx, req.JUnitPath, passedJUnit)
 		}
 
 		return nil
@@ -310,7 +325,7 @@ func TestMissingReportCannotReuseStaleResult(t *testing.T) {
 	ctx := testctx.NewCtx()
 	ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 	preparedNone(t, ctx, "")
-	write(t, ctx, request().JUnitPath, `<testsuites tests="1"/>`)
+	write(t, ctx, request().JUnitPath, passedJUnit)
 
 	runner, err := pytest.New("smoke", nil)
 	require.NoError(t, err)
@@ -339,9 +354,11 @@ func TestRPMOnlyAndEmptyProperties(t *testing.T) {
 			assert.Equal(t, []string{
 				"-m", "pytest", "image:", "properties:{}", "inputs:/work/inputs.json",
 				"-o", "cache_dir=" + command.Dir + "/.pytest_cache",
+				"--junit-xml", "/work/smoke/pytest.junit.xml",
 			},
 				command.Args[1:])
 			assert.Contains(t, command.Env, "AZLDEV_TEST_INPUTS=/work/inputs.json")
+			write(t, ctx, "/work/smoke/pytest.junit.xml", passedJUnit)
 		}
 
 		return nil
@@ -349,7 +366,7 @@ func TestRPMOnlyAndEmptyProperties(t *testing.T) {
 	result, err := runner.Run(ctx, req)
 	require.NoError(t, err)
 	assert.Equal(t, testframework.Passed, result.Status)
-	assert.Empty(t, result.JUnitPath)
+	assert.Equal(t, "/work/smoke/pytest.junit.xml", result.JUnitPath)
 }
 
 func TestNoneRequiresCallerPreparedRuntimeWithoutInstalling(t *testing.T) {
@@ -359,7 +376,7 @@ func TestNoneRequiresCallerPreparedRuntimeWithoutInstalling(t *testing.T) {
 			require.NoError(t, ctx.OSEnv().Chdir("/tests"))
 			write(t, ctx, "/tests/test_original.py", "original")
 
-			dir := "/cache/python/2091d6e46f973f9f0b773facba0d69e19da73016c41c1f62051a74c04788ffcc"
+			dir := request().PreparedPythonDir
 
 			if stage != missingEnvironment {
 				preparedNone(t, ctx, "")
@@ -383,7 +400,7 @@ func TestNoneRequiresCallerPreparedRuntimeWithoutInstalling(t *testing.T) {
 
 				if len(command.Args) > 2 && command.Args[2] == pytestModule {
 					write(t, ctx, command.Dir+"/test_original.py", "private modification")
-					write(t, ctx, request().JUnitPath, "<testsuites/>")
+					write(t, ctx, request().JUnitPath, passedJUnit)
 				}
 
 				return nil
@@ -414,14 +431,14 @@ func TestNoneRequiresCallerPreparedRuntimeWithoutInstalling(t *testing.T) {
 			}
 
 			if stage == missingEnvironment {
-				exists, checkErr := fileutils.Exists(ctx.FS(), "/cache")
+				exists, checkErr := fileutils.Exists(ctx.FS(), "/project-work")
 				require.NoError(t, checkErr)
 				assert.False(t, exists, "missing caller-prepared cache must not be created")
 			} else {
-				entries, readErr := fileutils.ReadDir(ctx.FS(), "/cache")
+				entries, readErr := fileutils.ReadDir(ctx.FS(), "/project-work/pytest-venv")
 				require.NoError(t, readErr)
 				require.Len(t, entries, 1)
-				assert.Equal(t, "python", entries[0].Name())
+				assert.Equal(t, "smoke", entries[0].Name())
 			}
 		})
 	}
@@ -475,7 +492,7 @@ func TestOverlappingRequestsNeverMutateCallerSourcesOrEachOther(t *testing.T) {
 			assert.True(t, exists, "second run cleanup must not remove the first run's source")
 		}
 
-		write(t, ctx, command.Args[len(command.Args)-1], "<testsuites/>")
+		write(t, ctx, command.Args[len(command.Args)-1], passedJUnit)
 
 		return nil
 	}
@@ -510,8 +527,9 @@ func TestProjectRootWithNestedCacheKeepsCallerContentsUnchanged(t *testing.T) {
 
 				req := request()
 				req.CacheDir = root + "/build/work/test-cache"
+				req.PreparedPythonDir = root + "/build/work/pytest-venv/smoke"
 				req.WorkDir = root + "/build/work/output"
-				req.JUnitPath = ""
+				req.JUnitPath = "/reports/smoke.xml"
 				require.NoError(t, fileutils.MkdirAll(ctx.FS(), req.WorkDir))
 
 				raw := map[string]any{"working-dir": root, "install": mode}
@@ -529,7 +547,7 @@ func TestProjectRootWithNestedCacheKeepsCallerContentsUnchanged(t *testing.T) {
 					req.CacheDir + "/keep.txt": "caller cache",
 				}
 
-				preparedDir := filepath.Join(req.CacheDir, "python", cachekey.From("pytest", "smoke", root, installNone))
+				preparedDir := req.PreparedPythonDir
 				if mode == installNone {
 					originals[preparedDir+"/bin/python3"] = "prepared Python"
 					originals[preparedDir+"/pyvenv.cfg"] = "prepared configuration"
@@ -560,6 +578,7 @@ func TestProjectRootWithNestedCacheKeepsCallerContentsUnchanged(t *testing.T) {
 						assert.False(t, strings.HasPrefix(runSource, root+"/"))
 						write(t, ctx, runSource+"/test_example.py", "pytest mutation")
 						write(t, ctx, runSource+"/build/work/test-cache/keep.txt", "private cache mutation")
+						write(t, ctx, req.JUnitPath, passedJUnit)
 					}
 
 					return nil
@@ -646,7 +665,7 @@ func TestSetupFailureAndCancellationCannotPoisonNextRun(t *testing.T) {
 					}
 
 					if len(command.Args) > 2 && command.Args[2] == pytestModule {
-						write(t, ctx, request().JUnitPath, "<testsuites/>")
+						write(t, ctx, request().JUnitPath, passedJUnit)
 					}
 
 					return nil

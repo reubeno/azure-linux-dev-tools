@@ -41,14 +41,16 @@ and container image tests, and pytest inspects artifacts from the host.
 VM adapters detect disk contents and privately convert RAW, VHD, and VHDX
 inputs to qcow2 when necessary; they do not rewrite the input artifact.
 Framework checkouts and managed Python environments are private per run.
-`pytest install=none` instead requires an existing caller-prepared environment.
+`pytest install=none` instead requires an existing caller-prepared environment
+at `{{ .WorkDir }}/pytest-venv/<test-name>`; azldev does not install into it.
 Inspect retained native logs and per-case JUnit when a test fails; for TMT,
 `python-environment.txt` records runtime versions and `tmt-output.log` captures
 combined output. A QEMU image must have working cloud-init; Hyper-V-specific
 reporting can make an otherwise reachable guest fail LISA provisioning.
 TMT VM plans currently support one provision phase; multi-guest plans are
 rejected rather than silently changing guest requirements. All-skipped runs
-are reported as skipped, while reporting and cleanup failures remain errors.
+are reported as skipped by every framework; collecting zero cases is an error.
+Normalized cases retain native statuses, and reporting/cleanup failures remain errors.
 
 Published images live under
 `[distros.<distro>.versions.<version>.images.<name>.architectures]`, independently

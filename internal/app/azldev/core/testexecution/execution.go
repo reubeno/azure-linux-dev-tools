@@ -415,8 +415,9 @@ func prepareRequest(env *azldev.Env, subject Subject, plan plannedTest, inputs t
 		Execution: plan.execution, SubjectName: subject.Name,
 		Capabilities: subject.Capabilities, Properties: subject.Properties, WorkDir: workDir,
 		CacheDir: filepath.Join(env.WorkDir(), "test-cache"), JUnitPath: filepath.Join(workDir, "junit.xml"),
-		InputsPath: filepath.Join(workDir, "inputs.json"),
-		Image:      inputs.Image, Packages: inputs.Packages,
+		PreparedPythonDir: filepath.Join(env.WorkDir(), "pytest-venv", plan.test.Name),
+		InputsPath:        filepath.Join(workDir, "inputs.json"),
+		Image:             inputs.Image, Packages: inputs.Packages,
 	}
 
 	if err := fileutils.MkdirAll(env.FS(), workDir); err != nil {

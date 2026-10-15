@@ -112,6 +112,8 @@ func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, result *te
 	if resultErr := collectRunResults(ctx.FS(), request.JUnitPath, result); resultErr != nil {
 		err = errors.Join(err, resultErr)
 		result.Status = testframework.Errored
+	} else {
+		result.Status, err = testframework.ResolveOutcome(result.Status, err, result.Cases)
 	}
 
 	if err != nil {

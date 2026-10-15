@@ -22,14 +22,11 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testsource"
-	"github.com/microsoft/azure-linux-dev-tools/internal/utils/cachekey"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/externalcmd"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/pythonenv"
 	"github.com/pelletier/go-toml/v2"
 )
-
-const exitNoTests = 5
 
 type config struct {
 	WorkingDir string                          `toml:"working-dir"`
@@ -120,6 +117,11 @@ func (r *Runner) Requirements(spec testframework.ExecutionSpec) (testframework.R
 // Run executes pytest and retains its native report and normalized exit status.
 func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (result testframework.RunResult, err error) {
 	start := time.Now()
+
+	if request.JUnitPath == "" {
+		request.JUnitPath = filepath.Join(request.WorkDir, "pytest.junit.xml")
+	}
+
 	result = testframework.RunResult{
 		Name: r.name, Framework: "pytest", Strategy: request.Execution.Strategy,
 		Status: testframework.Errored, OutputDir: request.WorkDir,
@@ -139,7 +141,7 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (result te
 		return result, err
 	}
 
-	if err = validateRequest(request); err != nil {
+	if err = r.validateRequest(request); err != nil {
 		return result, err
 	}
 
@@ -158,9 +160,13 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (result te
 	return result, err
 }
 
-func validateRequest(request testframework.RunRequest) error {
-	if !filepath.IsAbs(request.WorkDir) || !filepath.IsAbs(request.CacheDir) {
-		return errors.New("pytest requires absolute work and cache directories")
+func (r *Runner) validateRequest(request testframework.RunRequest) error {
+	if !filepath.IsAbs(request.WorkDir) {
+		return errors.New("pytest requires an absolute work directory")
+	}
+
+	if r.config.Install == projectconfig.PytestInstallNone && !filepath.IsAbs(request.PreparedPythonDir) {
+		return errors.New("pytest 'install=none' requires an absolute caller-prepared environment directory")
 	}
 
 	if request.JUnitPath != "" && !filepath.IsAbs(request.JUnitPath) {
@@ -260,26 +266,29 @@ func runAndReport(
 		result.JUnitPath = request.JUnitPath
 	}
 
-	if err == nil {
-		result.Status = testframework.Passed
+	cases, reportErr := testframework.ReadJUnit(ctx.FS(), request.JUnitPath)
+	result.Cases = cases
 
-		return nil
+	if reportErr != nil {
+		return errors.Join(err, reportErr)
 	}
 
-	var exit interface{ ExitCode() int }
-	if errors.As(err, &exit) {
-		switch exit.ExitCode() {
-		case 1:
-			result.Status = testframework.Failed
-			err = errors.Join(testframework.ErrTestFailed, err)
-		case exitNoTests:
-			result.Status = testframework.Skipped
+	native := testframework.Passed
+	if err != nil {
+		native = testframework.Errored
 
-			return nil
+		var exit interface{ ExitCode() int }
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			native = testframework.Failed
 		}
 	}
 
-	return err
+	result.Status, err = testframework.ResolveOutcome(native, err, cases)
+	if err != nil {
+		return fmt.Errorf("pytest outcome:\n%w", err)
+	}
+
+	return nil
 }
 
 func (r *Runner) localSource(ctx opctx.Ctx, request testframework.RunRequest) (string, error) {
@@ -339,24 +348,7 @@ func (r *Runner) preparePython(ctx opctx.Ctx, request testframework.RunRequest, 
 		return python, nil
 	}
 
-	// Preserve the location used by successful, explicitly prepared 'install=none'
-	// environments. Never turn this opt-out into an implicit dependency install.
-	identity := r.config.WorkingDir
-	if r.config.Source != nil || request.Execution.SourceDir != "" {
-		root := request.Execution.SourceDir
-		if root == "" {
-			root = filepath.Join(request.CacheDir, "sources", cachekey.From(r.config.Source.GitURL, r.config.Source.Ref))
-		}
-
-		if filepath.IsAbs(identity) {
-			identity = root
-		} else {
-			identity = filepath.Join(root, identity)
-		}
-	}
-
-	key := cachekey.From("pytest", r.name, identity, string(r.config.Install))
-	dir := filepath.Join(request.CacheDir, "python", key)
+	dir := request.PreparedPythonDir
 
 	python, err := pythonenv.Existing(ctx, dir)
 	if err == nil {

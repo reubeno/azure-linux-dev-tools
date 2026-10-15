@@ -170,7 +170,7 @@ arguments.
 |------|----------|
 | `pyproject` | Installs a private copy of the project in editable mode. Errors if `pyproject.toml` is not present. |
 | `requirements` | Installs from the private source copy's `requirements.txt`. Errors if the file is not present. |
-| `none` (default) | Uses the existing caller-prepared environment at its established location, without creating or changing it. The error identifies the required location when missing. Both a valid venv and importable pytest are required; there is no fallback to host Python. |
+| `none` (default) | Uses the caller-prepared environment at `<project-work-dir>/pytest-venv/<test-name>`, preserving main's established location without creating or changing it. Both a valid venv and importable pytest are required; there is no fallback to host Python. |
 
 `--junit-xml` output requested via `azldev image test --junit-xml <path>` is
 appended automatically; do not add it to `extra-args`. Relative CLI paths, including `--junit-xml`, are resolved against the selected

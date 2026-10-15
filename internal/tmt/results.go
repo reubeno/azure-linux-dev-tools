@@ -31,20 +31,24 @@ func collectRunResults(fs opctx.FS, junitPath string, result *testframework.RunR
 	}
 
 	for _, entry := range entries {
+		status := testframework.Errored
+
+		switch entry.Status {
+		case resultPass:
+			status = testframework.Passed
+		case "fail":
+			status = testframework.Failed
+		case "skip", "info":
+			status = testframework.Skipped
+		}
+
 		result.Cases = append(result.Cases, testframework.CaseResult{
-			Name: entry.Name, Status: entry.Status, Duration: entry.Duration, OutputPath: entry.OutputPath,
+			Name: entry.Name, Status: status, NativeStatus: entry.Status,
+			Duration: entry.Duration, OutputPath: entry.OutputPath,
 		})
 	}
 
-	if junitPath == "" {
-		return nil
-	}
-
-	if len(entries) == 0 {
-		if result.Status == testframework.Passed || result.Status == testframework.Skipped {
-			return errors.New("TMT completed without native test results for the requested JUnit report")
-		}
-
+	if junitPath == "" || len(entries) == 0 {
 		return nil
 	}
 
@@ -58,6 +62,7 @@ func collectRunResults(fs opctx.FS, junitPath string, result *testframework.RunR
 }
 
 const (
+	resultPass             = "pass"
 	yamlStringTag          = "!!str"
 	junitFailure           = "failure"
 	junitError             = "error"
@@ -453,8 +458,8 @@ func rejectResultSymlinks(fs opctx.FS, path string) error {
 // In particular, 'info' is not a pass, and 'warn' is an error rather than a pass.
 func resultCategory(status string) (string, error) {
 	switch status {
-	case "pass":
-		return "pass", nil
+	case resultPass:
+		return resultPass, nil
 	case "fail":
 		return junitFailure, nil
 	case junitError, "warn", "pending":

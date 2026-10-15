@@ -6,7 +6,6 @@ package lisa
 import (
 	"crypto/rand"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
@@ -211,27 +210,42 @@ func finishRun(ctx opctx.Ctx, junitPath string, runErr error, result *testframew
 		result.JUnitPath = junitPath
 	}
 
-	status, reportErr := reportStatus(ctx.FS(), junitPath)
+	cases, reportErr := testframework.ReadJUnit(ctx.FS(), junitPath)
+	result.Cases = cases
+
 	if reportErr != nil {
 		return errors.Join(runErr, reportErr)
 	}
 
-	result.Status = status
-	if status == testframework.Failed {
-		return errors.Join(testframework.ErrTestFailed, runErr)
-	}
+	native := nativeExitStatus(runErr, cases)
 
-	if runErr != nil {
-		result.Status = testframework.Errored
-
-		return fmt.Errorf("LISA command failed:\n%w", runErr)
-	}
-
-	if status == testframework.Errored {
-		return errors.New("LISA reported infrastructure errors")
+	result.Status, err = testframework.ResolveOutcome(native, runErr, cases)
+	if err != nil {
+		return fmt.Errorf("LISA outcome:\n%w", err)
 	}
 
 	return nil
+}
+
+func nativeExitStatus(runErr error, cases []testframework.CaseResult) testframework.Status {
+	if runErr == nil {
+		return testframework.Passed
+	}
+
+	failures := 0
+
+	for _, testcase := range cases {
+		if testcase.Status == testframework.Failed {
+			failures++
+		}
+	}
+
+	var exit interface{ ExitCode() int }
+	if failures > 0 && errors.As(runErr, &exit) && exit.ExitCode() == failures {
+		return testframework.Failed
+	}
+
+	return testframework.Errored
 }
 
 func validateRequest(request testframework.RunRequest) error {
@@ -315,50 +329,4 @@ func (r *Runner) arguments(runbookPath string, request testframework.RunRequest)
 	}
 
 	return args, nil
-}
-
-func reportStatus(fs opctx.FS, path string) (testframework.Status, error) {
-	data, err := fileutils.ReadFile(fs, path)
-	if err != nil {
-		return testframework.Errored, fmt.Errorf("read LISA JUnit report:\n%w", err)
-	}
-
-	var report struct {
-		XMLName xml.Name `xml:"testsuites"`
-		Tests   int      `xml:"tests,attr"`
-		Errors  int      `xml:"errors,attr"`
-		Failed  int      `xml:"failures,attr"`
-		Suites  []struct {
-			Cases []struct {
-				Skipped *struct{} `xml:"skipped"`
-			} `xml:"testcase"`
-		} `xml:"testsuite"`
-	}
-	if err := xml.Unmarshal(data, &report); err != nil {
-		return testframework.Errored, fmt.Errorf("parse LISA JUnit report:\n%w", err)
-	}
-
-	if report.Errors > 0 {
-		return testframework.Errored, nil
-	}
-
-	if report.Failed > 0 {
-		return testframework.Failed, nil
-	}
-
-	skipped := 0
-
-	for _, suite := range report.Suites {
-		for _, testcase := range suite.Cases {
-			if testcase.Skipped != nil {
-				skipped++
-			}
-		}
-	}
-
-	if report.Tests == 0 || skipped == report.Tests {
-		return testframework.Skipped, nil
-	}
-
-	return testframework.Passed, nil
 }

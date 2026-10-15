@@ -171,7 +171,7 @@ func TestInvocationRunbookAndCandidates(t *testing.T) {
 		assert.Contains(t, string(script), "tdnf -y reinstall ./*.rpm")
 		assert.NotContains(t, string(script), "--nodeps")
 		assert.NotContains(t, string(script), "--force")
-		write(t, ctx, req.JUnitPath, `<testsuites tests="1" failures="0" errors="0"/>`)
+		write(t, ctx, req.JUnitPath, `<testsuites tests="1"><testsuite><testcase name="pass"/></testsuite></testsuites>`)
 
 		return nil
 	}
@@ -294,12 +294,16 @@ func TestNativeReports(t *testing.T) {
 		xml    string
 		status testframework.Status
 	}{
-		{"pass", `<testsuites tests="1" failures="0"/>`, testframework.Passed},
-		{"fail", `<testsuites tests="1" failures="1"/>`, testframework.Failed},
-		{"empty", `<testsuites tests="0"/>`, testframework.Skipped},
+		{"pass", `<testsuites tests="1"><testsuite><testcase name="pass"/></testsuite></testsuites>`, testframework.Passed},
+		{
+			"fail", `<testsuites tests="1" failures="1"><testsuite>` +
+				`<testcase name="fail"><failure/></testcase></testsuite></testsuites>`,
+			testframework.Failed,
+		},
+		{"empty", `<testsuites tests="0"/>`, testframework.Errored},
 		{
 			"skipped",
-			`<testsuites tests="1"><testsuite><testcase><skipped/></testcase></testsuite></testsuites>`,
+			`<testsuites tests="1"><testsuite><testcase name="skip"><skipped/></testcase></testsuite></testsuites>`,
 			testframework.Skipped,
 		},
 		{"infrastructure", `<testsuites tests="1" errors="1"/>`, testframework.Errored},
@@ -313,6 +317,10 @@ func TestNativeReports(t *testing.T) {
 			ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
 				if filepath.Base(command.Args[0]) == "lisa" {
 					write(t, ctx, request().JUnitPath, item.xml)
+
+					if item.status == testframework.Failed {
+						return lisaExitError(1)
+					}
 				}
 
 				return nil
@@ -371,7 +379,7 @@ func TestMissingReportCannotReuseStaleResult(t *testing.T) {
 	runner, err := lisa.New("smoke", map[string]any{"name": "check"})
 	require.NoError(t, err)
 	result, err := runner.Run(ctx, request())
-	require.ErrorContains(t, err, "read LISA JUnit report")
+	require.ErrorContains(t, err, "read JUnit report")
 	assert.Equal(t, testframework.Errored, result.Status)
 	assert.Empty(t, result.JUnitPath)
 	assertClean(t, ctx)
