@@ -90,11 +90,6 @@ func selectBaseName(subject Subject, test projectconfig.ResolvedTest, requiremen
 	}
 
 	if !requirements.ImageRequired {
-		if options.BaseImage != "" || options.BaseImagePath != "" ||
-			options.RebuildBaseImage || options.BaseImageSource != "" {
-			return "", errors.New("base image options do not apply to this execution strategy")
-		}
-
 		return "", nil
 	}
 

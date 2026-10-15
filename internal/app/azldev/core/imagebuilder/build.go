@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
-	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/artifacts"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/workdir"
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/kiwi"
@@ -205,7 +205,7 @@ func recordImageBuild(env *azldev.Env, options *ImageBuildOptions, paths []strin
 		arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
 	}
 
-	if err := artifacts.RecordBuild(env, env.OutputDir(), artifacts.BuildRecord{
+	if err := artifact.RecordBuild(env, env.OutputDir(), artifact.BuildRecord{
 		Name: options.ImageName, Kind: "image", Arch: arch, BuiltAt: time.Now().UTC(), Paths: paths,
 	}); err != nil {
 		return fmt.Errorf("record image build:\n%w", err)

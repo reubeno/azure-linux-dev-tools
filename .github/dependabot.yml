@@ -49,6 +49,19 @@ updates:
         patterns:
           - "*"
 
+  # Shared TMT runtime constraints
+  - package-ecosystem: "pip"
+    directory: "/internal/tmt"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      dependabot-tmt:
+        applies-to: version-updates
+        patterns:
+          - "*"
+
   # Tools go.mod files
   - package-ecosystem: "gomod"
     directories:

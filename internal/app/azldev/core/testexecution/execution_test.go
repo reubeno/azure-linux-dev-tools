@@ -66,10 +66,21 @@ func TestComponentPytestInputsAndAggregatedJUnit(t *testing.T) {
 	env.CmdFactory.RegisterCommandInSearchPath("python3")
 	require.NoError(t, fileutils.MkdirAll(env.TestFS, "/project/tests"))
 	require.NoError(t, fileutils.WriteFile(env.TestFS, "/project/pkg.rpm", []byte("candidate"), fileperms.PrivateFile))
+	require.NoError(t, fileutils.WriteFile(env.TestFS, "/project/tests/requirements.txt",
+		[]byte("pytest\n"), fileperms.PrivateFile))
 
 	var reportPaths []string
 
 	env.CmdFactory.RunHandler = func(cmd *exec.Cmd) error {
+		if slices.Contains(cmd.Args, "venv") {
+			dir := cmd.Args[len(cmd.Args)-1]
+			require.NoError(t, fileutils.MkdirAll(env.TestFS, filepath.Join(dir, "bin")))
+			require.NoError(t, fileutils.WriteFile(env.TestFS, filepath.Join(dir, "bin", "python3"),
+				nil, fileperms.PrivateFile))
+			require.NoError(t, fileutils.WriteFile(env.TestFS, filepath.Join(dir, "pyvenv.cfg"),
+				[]byte("home = /python\n"), fileperms.PrivateFile))
+		}
+
 		if slices.Contains(cmd.Args, "pytest") {
 			for index, arg := range cmd.Args {
 				if arg == "--junit-xml" || arg == "--junitxml" {
@@ -87,8 +98,14 @@ func TestComponentPytestInputsAndAggregatedJUnit(t *testing.T) {
 
 		return nil
 	}
+
+	tests := []projectconfig.ResolvedTest{pytestTest("one"), pytestTest("two")}
+	for _, test := range tests {
+		test.Definition.Pytest["install"] = "requirements"
+	}
+
 	results, err := testexecution.Run(env.Env, testexecution.Subject{Name: "curl", Kind: "component"},
-		[]projectconfig.ResolvedTest{pytestTest("one"), pytestTest("two")},
+		tests,
 		testexecution.Options{RPMPaths: []string{"pkg.rpm"}, JUnitXMLPath: "results.xml"},
 		&artifacts.Resolver{Env: env.Env})
 	require.NoError(t, err)

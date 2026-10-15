@@ -4,12 +4,14 @@
 package lisa_test
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/testctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/lisa"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
@@ -24,7 +26,7 @@ func request() testframework.RunRequest {
 	return testframework.RunRequest{
 		Execution:   testframework.ExecutionSpec{Strategy: testframework.VM, FrameworkDir: "/checkout"},
 		SubjectName: "curl", WorkDir: "/work/smoke", CacheDir: "/cache",
-		ImagePath: "/images/base.qcow2", InputsPath: "/work/inputs.json",
+		Image: &artifact.Artifact{Path: "/images/base.qcow2", Format: "qcow2"}, InputsPath: "/work/inputs.json",
 		JUnitPath: "/reports/smoke.xml", Capabilities: []string{"bootable", "ssh"},
 		Properties: map[string]string{"arch": "aarch64"},
 	}
@@ -94,7 +96,9 @@ func TestInvocationRunbookAndCandidates(t *testing.T) {
 	require.NoError(t, err)
 
 	req := request()
-	req.RPMPaths = []string{"/rpms/curl.rpm", "/other/libcurl.rpm"}
+	req.Packages = []artifact.Artifact{
+		{Path: "/rpms/curl.rpm", Format: "rpm"}, {Path: "/other/libcurl.rpm", Format: "rpm"},
+	}
 
 	var (
 		commands   []*exec.Cmd
@@ -139,7 +143,7 @@ func TestInvocationRunbookAndCandidates(t *testing.T) {
 		platform := decoded[map[string]any](t, decoded[[]any](t, runbook["platform"])[0])
 		assert.Equal(t, "no", platform["keep_environment"])
 		assert.Equal(t, filepath.Join(privateDir, "id_rsa"), platform["admin_private_key_file"])
-		assert.Equal(t, map[string]any{"qemu": map[string]any{"qcow2": req.ImagePath}}, platform["requirement"])
+		assert.Equal(t, map[string]any{"qemu": map[string]any{"qcow2": req.ImagePath()}}, platform["requirement"])
 
 		transformers := decoded[[]any](t, runbook["transformer"])
 		require.Len(t, transformers, 4)
@@ -237,10 +241,12 @@ func TestRequirementsAndInvalidRequests(t *testing.T) {
 	require.ErrorContains(t, err, "source")
 
 	for name, modify := range map[string]func(*testframework.RunRequest){
-		"raw":      func(req *testframework.RunRequest) { req.ImagePath = "/base.raw" },
+		"raw":      func(req *testframework.RunRequest) { req.Image = &artifact.Artifact{Path: "/base.raw", Format: "raw"} },
 		"relative": func(req *testframework.RunRequest) { req.WorkDir = "relative" },
-		"rpm":      func(req *testframework.RunRequest) { req.RPMPaths = []string{"candidate.rpm"} },
-		"xml":      func(req *testframework.RunRequest) { req.JUnitPath = "relative.xml" },
+		"rpm": func(req *testframework.RunRequest) {
+			req.Packages = []artifact.Artifact{{Path: "candidate.rpm", Format: "rpm"}}
+		},
+		"xml": func(req *testframework.RunRequest) { req.JUnitPath = "relative.xml" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := testctx.NewCtx()
@@ -379,6 +385,39 @@ func TestMissingFrameworkAndNestedRunDirectory(t *testing.T) {
 			exists, err := fileutils.Exists(ctx.FS(), req.WorkDir)
 			require.NoError(t, err)
 			assert.False(t, exists)
+		})
+	}
+}
+
+func TestCancellationCleansPrivateRuntimeAndPreservesSource(t *testing.T) {
+	for _, stage := range []string{"venv", "pip", "lisa"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := setup(t)
+
+			cancelCtx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			ctx.Ctx = cancelCtx
+			runner, err := lisa.New("smoke", map[string]any{"name": "check"})
+			require.NoError(t, err)
+
+			ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
+				if len(command.Args) > 2 && command.Args[2] == "pip" {
+					write(t, ctx, command.Dir+"/pyproject.toml", "private build metadata")
+				}
+
+				if filepath.Base(command.Args[0]) == stage || contains(command.Args, stage) {
+					cancel()
+
+					return context.Canceled
+				}
+
+				return nil
+			}
+			result, err := runner.Run(ctx, request())
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Equal(t, testframework.Cancelled, result.Status)
+			assertClean(t, ctx)
 		})
 	}
 }

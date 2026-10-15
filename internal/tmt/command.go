@@ -15,12 +15,13 @@ import (
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/cachekey"
 )
 
 const candidateRPMPrepareStepName = "azldev-candidate-rpms"
 
 func runArgs(
-	plan string, request testframework.RunRequest, outputDir string, hardware []string,
+	plan string, request testframework.RunRequest, outputDir string, hardware []string, imageArgument string,
 ) []string {
 	args := []string{"run", "--all", "--keep", "--workdir-root", outputDir, "plan"}
 	if plan != "" {
@@ -31,12 +32,17 @@ func runArgs(
 
 	switch request.Execution.Strategy {
 	case testframework.VM:
-		args = append(args, "--image", request.ImagePath)
+		args = append(args, "--image", imageArgument)
+		if request.Image != nil && request.Image.Arch != "" {
+			args = append(args, "--arch", request.Image.Arch)
+		}
+
 		for _, constraint := range hardware {
 			args = append(args, "--hardware", constraint)
 		}
 	case testframework.Container:
-		args = append(args, "--image", request.ImagePath)
+		args = append(args, "--image", imageArgument)
+		args = append(args, "--network-prefix", "azldev-"+cachekey.From(request.WorkDir)[:16])
 	case testframework.SSH:
 		args = append(args, "--guest", request.Execution.SSHHost, "--user", request.Execution.SSHUser)
 		if request.Execution.SSHKey != "" {
@@ -51,9 +57,9 @@ func runArgs(
 
 	// Inserting a separate step avoids inheriting a plan preparation's 'when'
 	// condition. Image-only tests must leave preparation completely unchanged.
-	if len(request.RPMPaths) != 0 {
+	if len(request.RPMPaths()) != 0 {
 		args = append(args, "prepare", "--insert", "--how", "install", "--name", candidateRPMPrepareStepName)
-		for _, rpm := range request.RPMPaths {
+		for _, rpm := range request.RPMPaths() {
 			args = append(args, "--package", rpm)
 		}
 	}

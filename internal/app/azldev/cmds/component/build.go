@@ -12,11 +12,11 @@ import (
 
 	rpmlib "github.com/cavaliergopher/rpm"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
-	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/artifacts"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/componentbuilder"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/components"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/sources"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/workdir"
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/buildenv"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
@@ -335,7 +335,7 @@ func recordComponentBuild(env *azldev.Env, name string, options *ComponentBuildO
 		arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
 	}
 
-	if err := artifacts.RecordBuild(env, env.OutputDir(), artifacts.BuildRecord{
+	if err := artifact.RecordBuild(env, env.OutputDir(), artifact.BuildRecord{
 		Name: name, Kind: "component", Arch: arch, BuiltAt: time.Now().UTC(), Paths: paths,
 	}); err != nil {
 		return fmt.Errorf("record component build:\n%w", err)

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testutils"
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
@@ -17,6 +18,41 @@ import (
 )
 
 type failedRunner struct{}
+
+func TestRequestPreservesArtifactMetadata(t *testing.T) {
+	env := testutils.NewTestEnv(t)
+	image := &artifact.Artifact{
+		Path: "/images/base.qcow2", Format: "qcow2", Arch: "aarch64",
+		Source: "lkg", SHA256: "image-digest", URI: "https://example.test/base",
+	}
+	packages := []artifact.Artifact{{Path: "/rpms/pkg.rpm", Format: "rpm", Arch: "aarch64", Source: "local"}}
+	request, err := prepareRequest(env.Env, Subject{Name: "pkg"}, plannedTest{},
+		testInputs{Image: image, Packages: packages}, "/work/run")
+	require.NoError(t, err)
+	assert.Equal(t, *image, *request.Image)
+	assert.Equal(t, packages, request.Packages)
+	assert.Equal(t, "/images/base.qcow2", request.ImagePath())
+	assert.Equal(t, []string{"/rpms/pkg.rpm"}, request.RPMPaths())
+}
+
+func TestBaseOverrideOnlyAppliesToImageConsumers(t *testing.T) {
+	tests := []projectconfig.ResolvedTest{
+		{Name: "tmt", Definition: projectconfig.TestDefinition{Type: "tmt", Tmt: map[string]any{}}},
+		{Name: "pytest", Definition: projectconfig.TestDefinition{Type: "pytest", Pytest: map[string]any{
+			"working-dir": "/tests", "test-paths": []string{"test_rpm.py"},
+		}}},
+	}
+	options := Options{SourceDir: "/tests", Plan: "/plans/all", BaseImagePath: "/base.qcow2"}
+	plans, err := planTests(Subject{Name: "curl", Kind: componentSubject}, tests, options)
+	require.NoError(t, err)
+	require.Len(t, plans, 2)
+	assert.Equal(t, "explicit-base", plans[0].baseName)
+	assert.Empty(t, plans[1].baseName)
+
+	options.Plan = ""
+	_, err = planTests(Subject{Name: "curl", Kind: componentSubject}, tests[1:], options)
+	require.ErrorContains(t, err, "base image options")
+}
 
 func TestMixedFrameworkOverridesAreRoutedPerTest(t *testing.T) {
 	tests := []projectconfig.ResolvedTest{

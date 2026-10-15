@@ -56,11 +56,11 @@ func (r *Runner) runbook(frameworkDir, keyPath string, request testframework.Run
 			"type": "qemu", "admin_username": "lisa", "admin_private_key_file": keyPath,
 			"keep_environment": "no",
 			"qemu":             map[string]any{"network_boot_timeout": bootTimeoutSeconds},
-			"requirement":      map[string]any{"qemu": map[string]string{"qcow2": request.ImagePath}},
+			"requirement":      map[string]any{"qemu": map[string]string{"qcow2": request.ImagePath()}},
 		}},
 	}
-	if len(request.RPMPaths) > 0 {
-		transformers, err := candidateTransformers(request.RPMPaths, filepath.Dir(frameworkDir))
+	if len(request.RPMPaths()) > 0 {
+		transformers, err := candidateTransformers(request.RPMPaths(), filepath.Dir(frameworkDir))
 		if err != nil {
 			return nil, err
 		}

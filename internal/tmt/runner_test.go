@@ -5,21 +5,28 @@ package tmt_test
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"io/fs"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/testctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/tmt"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/cachekey"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+//go:embed requirements.txt
+var pinnedRequirements []byte
 
 const (
 	sourceDir  = "/source"
@@ -167,7 +174,9 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 			require.NoError(t, err)
 
 			request := requestFor(strategy)
-			request.RPMPaths = []string{"/packages/main.rpm", "/packages/tests.rpm"}
+			request.Packages = []artifact.Artifact{
+				{Path: "/packages/main.rpm", Format: "rpm"}, {Path: "/packages/tests.rpm", Format: "rpm"},
+			}
 			request.JUnitPath = "/work/claimed-junit.xml"
 
 			var (
@@ -177,10 +186,17 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 
 			ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
 				commands = append(commands, command)
+				if filepath.Base(command.Args[0]) == tmtProgram {
+					writeFile(t, ctx, command.Dir+"/.fmf/version", "private mutation\n")
+				}
 
 				return nil
 			}
 			ctx.CmdFactory.RunAndGetOutputHandler = func(command *exec.Cmd) (string, error) {
+				if slices.Contains(command.Args, "freeze") {
+					return string(pinnedRequirements), nil
+				}
+
 				exports = append(exports, command)
 				if command.Args[0] == "podman" {
 					assert.Equal(t, []string{"podman", "pull", "--quiet", "oci-archive:/images/image"}, command.Args)
@@ -188,7 +204,7 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 					return imageID + "\n", nil
 				}
 
-				assert.Equal(t, sourceDir, command.Dir)
+				assert.Equal(t, filepath.Join(filepath.Dir(commands[0].Args[3]), "source"), command.Dir)
 				assert.Equal(t, []string{"plan", "export", planName, "--how", "json"}, command.Args[1:])
 
 				return `[{"name":"/plans/smoke","provision":[{"hardware":{` +
@@ -205,11 +221,12 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 			assert.Empty(t, result.JUnitPath, "TMT's default reporter does not produce JUnit")
 			require.Len(t, commands, 3, "only venv, pip, and TMT run should execute")
 			assert.Equal(t, []string{"-m", "venv"}, commands[0].Args[1:3])
-			assert.True(t, strings.HasPrefix(commands[1].Args[0], cacheDir+"/tmt/"))
+			assert.Equal(t, filepath.Join(commands[0].Args[3], "bin/python3"), commands[1].Args[0])
 			assert.Equal(t, []string{"-m", "pip", "install", "--quiet"}, commands[1].Args[1:5])
 
 			command := commands[2]
-			assert.Equal(t, sourceDir, command.Dir)
+			assert.Equal(t, filepath.Join(filepath.Dir(commands[0].Args[3]), "source"), command.Dir)
+			assert.NotEqual(t, sourceDir, command.Dir)
 			assert.Contains(t, command.Env, "TMT_BOOT_TIMEOUT=300")
 
 			for _, untouched := range []string{"discover", "execute", "report", "finish", "reboot", "remove"} {
@@ -226,10 +243,11 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 				expected = append(expected, "virtual", "--become", "--image", "/images/image",
 					"--hardware", "cpu.cores = 4", "--hardware", "memory >= 4 GB", "--hardware", "boot.method = uefi")
 
-				assert.Equal(t, "tmt[provision-virtual]==1.78.0", commands[1].Args[5])
+				assert.Equal(t, "tmt[provision-virtual]", commands[1].Args[len(commands[1].Args)-1])
 				assert.Contains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
 			case testframework.Container:
-				expected = append(expected, "container", "--become", "--image", imageID)
+				expected = append(expected, "container", "--become", "--image", imageID,
+					"--network-prefix", "azldev-"+cachekey.From(request.WorkDir)[:16])
 			case testframework.SSH:
 				expected = append(expected, "connect", "--become", "--guest", "machine.example",
 					"--user", "tester", "--key", "/keys/id", "--port", "2222")
@@ -240,7 +258,7 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 			}
 
 			if strategy != testframework.VM {
-				assert.Equal(t, "tmt==1.78.0", commands[1].Args[5])
+				assert.Equal(t, "tmt", commands[1].Args[len(commands[1].Args)-1])
 				assert.NotContains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
 			}
 
@@ -253,6 +271,10 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 			expected = append(expected, "prepare", "--insert", "--how", "install", "--name", "azldev-candidate-rpms",
 				"--package", "/packages/main.rpm", "--package", "/packages/tests.rpm")
 			assert.Equal(t, expected, command.Args[1:])
+
+			frozen, err := fileutils.ReadFile(ctx.FS(), filepath.Join(request.WorkDir, "python-environment.txt"))
+			require.NoError(t, err)
+			assert.Equal(t, strings.TrimSpace(string(pinnedRequirements)), strings.TrimSpace(string(frozen)))
 
 			sourceEntries, err := fileutils.ReadDir(ctx.FS(), sourceDir)
 			require.NoError(t, err)
@@ -304,8 +326,12 @@ func TestContainerUsesResolvedLocalImageID(t *testing.T) {
 	require.NoError(t, err)
 
 	request := requestFor(testframework.Container)
-	request.ImagePath = imageID
-	ctx.CmdFactory.RunAndGetOutputHandler = func(*exec.Cmd) (string, error) {
+	request.Image = &artifact.Artifact{Path: imageID, Format: "oci"}
+	ctx.CmdFactory.RunAndGetOutputHandler = func(command *exec.Cmd) (string, error) {
+		if slices.Contains(command.Args, "freeze") {
+			return string(pinnedRequirements), nil
+		}
+
 		t.Fatal("a resolved image ID must not be imported or pulled again")
 
 		return "", nil
@@ -433,11 +459,12 @@ func TestRunPreflightFailsBeforeProcesses(t *testing.T) {
 		{"source equals work", func(r *testframework.RunRequest) { r.WorkDir = sourceDir }, "must not overlap"},
 		{"work inside source", func(r *testframework.RunRequest) { r.WorkDir = sourceDir + "/work" }, "must not overlap"},
 		{"source inside work", func(r *testframework.RunRequest) { r.WorkDir = "/" }, "must not overlap"},
-		{"cache inside source", func(r *testframework.RunRequest) { r.CacheDir = sourceDir + "/cache" }, "must not overlap"},
 		{"relative work", func(r *testframework.RunRequest) { r.WorkDir = "work" }, "work directory must be absolute"},
 		{"relative cache", func(r *testframework.RunRequest) { r.CacheDir = "cache" }, "cache directory must be absolute"},
-		{"missing image", func(r *testframework.RunRequest) { r.ImagePath = "" }, "image path"},
-		{"relative RPM", func(r *testframework.RunRequest) { r.RPMPaths = []string{"package.rpm"} }, "RPM path"},
+		{"missing image", func(r *testframework.RunRequest) { r.Image = nil }, "image path"},
+		{"relative RPM", func(r *testframework.RunRequest) {
+			r.Packages = []artifact.Artifact{{Path: "package.rpm", Format: "rpm"}}
+		}, "RPM path"},
 		{"host with image", func(r *testframework.RunRequest) {
 			r.Execution.Strategy = testframework.Host
 		}, "does not accept"},
@@ -543,7 +570,7 @@ func TestSetupExitOneIsInfrastructure(t *testing.T) {
 	assert.Equal(t, testframework.Errored, result.Status)
 }
 
-func TestPinnedSourceUsesSharedCheckoutAndCache(t *testing.T) {
+func TestPinnedSourceUsesFreshCheckoutAndEnvironment(t *testing.T) {
 	ctx := newRunContext(t)
 	ctx.CmdFactory.RegisterCommandInSearchPath("git")
 
@@ -572,18 +599,127 @@ func TestPinnedSourceUsesSharedCheckoutAndCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, commands, 5)
 	assert.Equal(t, "https://example.test/tests.git", commands[0].Args[2])
-	assert.True(t, strings.HasPrefix(checkout, cacheDir+"/sources/"))
+	assert.True(t, strings.HasPrefix(filepath.Base(filepath.Dir(checkout)), "azldev-tmt-"))
 	assert.Equal(t, []string{"git", "-C", checkout, "checkout", strings.Repeat("a", 40)}, commands[1].Args)
 	assert.Equal(t, checkout, commands[4].Dir)
+	firstCheckout := checkout
+	firstPython := commands[3].Args[0]
 
 	commands = nil
 	request.WorkDir = "/work/next-run"
 	_, err = runner.Run(ctx, request)
 	require.NoError(t, err)
-	require.Len(t, commands, 4, "cached source must not be recloned or deleted")
-	assert.Equal(t, "checkout", commands[0].Args[3])
-	assert.Equal(t, checkout, commands[3].Dir)
-	assert.Contains(t, commands[3].Args, "/work/next-run/tmt")
+	require.Len(t, commands, 5, "each run needs a fresh pinned checkout and environment")
+	assert.Equal(t, "clone", commands[0].Args[1])
+	assert.Equal(t, checkout, commands[4].Dir)
+	assert.NotEqual(t, firstCheckout, checkout)
+	assert.NotEqual(t, firstPython, commands[3].Args[0])
+	assert.Contains(t, commands[4].Args, "/work/next-run/tmt")
+
+	for _, path := range []string{filepath.Dir(firstCheckout), filepath.Dir(checkout)} {
+		exists, checkErr := fileutils.Exists(ctx.FS(), path)
+		require.NoError(t, checkErr)
+		assert.False(t, exists, "source and environment must both be removed after use")
+	}
+}
+
+func TestSourceContainingProjectCacheUsesIndependentRuntime(t *testing.T) {
+	ctx := newRunContext(t)
+	req := requestFor(testframework.Host)
+	req.CacheDir = sourceDir + "/build/work/test-cache"
+	writeFile(t, ctx, req.CacheDir+"/keep.txt", "caller cache")
+	before, err := fileutils.Glob(ctx.FS(), sourceDir+"/**/*")
+	require.NoError(t, err)
+
+	var runSource, runtime string
+
+	ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
+		if len(command.Args) > 2 && command.Args[2] == "venv" {
+			runtime = filepath.Dir(command.Args[3])
+			assert.False(t, strings.HasPrefix(runtime, sourceDir+"/"))
+		}
+
+		if filepath.Base(command.Args[0]) == tmtProgram {
+			runSource = command.Dir
+			assert.Equal(t, filepath.Join(runtime, "source"), runSource)
+			writeFile(t, ctx, runSource+"/.fmf/version", "private mutation")
+			writeFile(t, ctx, runSource+"/build/work/test-cache/keep.txt", "private cache mutation")
+		}
+
+		return nil
+	}
+	runner, err := tmt.New("example", nil)
+	require.NoError(t, err)
+	result, err := runner.Run(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, testframework.Passed, result.Status)
+	require.NotEmpty(t, runSource)
+
+	exists, err := fileutils.Exists(ctx.FS(), runtime)
+	require.NoError(t, err)
+	assert.False(t, exists, "the private source and environment must be removed")
+
+	after, err := fileutils.Glob(ctx.FS(), sourceDir+"/**/*")
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "no runtime files may be added to the caller tree")
+
+	for path, original := range map[string]string{
+		sourceDir + "/.fmf/version": "1\n",
+		req.CacheDir + "/keep.txt":  "caller cache",
+	} {
+		data, readErr := fileutils.ReadFile(ctx.FS(), path)
+		require.NoError(t, readErr)
+		assert.Equal(t, original, string(data), path)
+	}
+}
+
+func TestRuntimeFailureAndCancellationCleanup(t *testing.T) {
+	for _, stage := range []string{"venv", "pip", "tmt"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := newRunContext(t)
+
+			cancelCtx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			ctx.Ctx = cancelCtx
+			runner, err := tmt.New("example", nil)
+			require.NoError(t, err)
+
+			var privateDir string
+
+			ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
+				if len(command.Args) > 2 && command.Args[2] == "venv" {
+					privateDir = filepath.Dir(command.Args[3])
+					writeFile(t, ctx, command.Args[3]+"/bin/python3", "partial Python")
+				}
+
+				if filepath.Base(command.Args[0]) == stage || (len(command.Args) > 2 && command.Args[2] == stage) {
+					cancel()
+
+					return context.Canceled
+				}
+
+				return nil
+			}
+			result, err := runner.Run(ctx, requestFor(testframework.Host))
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Equal(t, testframework.Cancelled, result.Status)
+			require.NotEmpty(t, privateDir)
+			exists, checkErr := fileutils.Exists(ctx.FS(), privateDir)
+			require.NoError(t, checkErr)
+			assert.False(t, exists)
+
+			marker, readErr := fileutils.ReadFile(ctx.FS(), sourceDir+"/.fmf/version")
+			require.NoError(t, readErr)
+			assert.Equal(t, "1\n", string(marker))
+
+			ctx.Ctx = t.Context()
+			ctx.CmdFactory.RunHandler = nil
+			result, err = runner.Run(ctx, requestFor(testframework.Host))
+			require.NoError(t, err)
+			assert.Equal(t, testframework.Passed, result.Status)
+		})
+	}
 }
 
 func TestInvalidFilesFailBeforeProcesses(t *testing.T) {
@@ -593,13 +729,13 @@ func TestInvalidFilesFailBeforeProcesses(t *testing.T) {
 		want   string
 	}{
 		{"missing image", func(_ *testctx.TestCtx, request *testframework.RunRequest) {
-			request.ImagePath = "/images/missing"
+			request.Image.Path = "/images/missing"
 		}, "TMT input file"},
 		{"directory image", func(_ *testctx.TestCtx, request *testframework.RunRequest) {
-			request.ImagePath = "/images"
+			request.Image.Path = "/images"
 		}, "must be a regular file"},
 		{"missing RPM", func(_ *testctx.TestCtx, request *testframework.RunRequest) {
-			request.RPMPaths = []string{"/packages/missing.rpm"}
+			request.Packages = []artifact.Artifact{{Path: "/packages/missing.rpm", Format: "rpm"}}
 		}, "TMT input file"},
 		{"directory fmf marker", func(ctx *testctx.TestCtx, _ *testframework.RunRequest) {
 			require.NoError(t, ctx.FS().Remove(sourceDir+"/.fmf/version"))
@@ -660,7 +796,10 @@ func requestFor(strategy testframework.Strategy) testframework.RunRequest {
 		Execution: executionFor(strategy), WorkDir: workDir, CacheDir: cacheDir,
 	}
 	if strategy == testframework.VM || strategy == testframework.Container {
-		request.ImagePath = "/images/image"
+		request.Image = &artifact.Artifact{Path: "/images/image", Format: "qcow2"}
+		if strategy == testframework.Container {
+			request.Image.Format = "oci"
+		}
 	}
 
 	return request

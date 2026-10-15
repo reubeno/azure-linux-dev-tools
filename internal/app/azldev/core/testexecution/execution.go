@@ -192,6 +192,8 @@ func planTests(subject Subject, tests []projectconfig.ResolvedTest, options Opti
 	}
 
 	plans := make([]plannedTest, 0, len(tests))
+	hasBaseConsumer := false
+
 	for _, test := range tests {
 		plan, err := planOne(subject, test, options)
 		if err != nil {
@@ -199,6 +201,11 @@ func planTests(subject Subject, tests []projectconfig.ResolvedTest, options Opti
 		}
 
 		plans = append(plans, plan)
+		hasBaseConsumer = hasBaseConsumer || plan.requirements.ImageRequired
+	}
+
+	if options.hasBaseOptions() && (subject.Kind != componentSubject || !hasBaseConsumer) {
+		return nil, errors.New("base image options require a component test that consumes a supporting image")
 	}
 
 	return plans, nil
@@ -413,13 +420,7 @@ func prepareRequest(env *azldev.Env, subject Subject, plan plannedTest, inputs t
 		Capabilities: subject.Capabilities, Properties: subject.Properties, WorkDir: workDir,
 		CacheDir: filepath.Join(env.WorkDir(), "test-cache"), JUnitPath: filepath.Join(workDir, "junit.xml"),
 		InputsPath: filepath.Join(workDir, "inputs.json"),
-	}
-	if inputs.Image != nil {
-		request.ImagePath = inputs.Image.Path
-	}
-
-	for _, rpm := range inputs.Packages {
-		request.RPMPaths = append(request.RPMPaths, rpm.Path)
+		Image:      inputs.Image, Packages: inputs.Packages,
 	}
 
 	if err := fileutils.MkdirAll(env.FS(), workDir); err != nil {

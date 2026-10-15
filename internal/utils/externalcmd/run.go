@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package testframework
+package externalcmd
 
 import (
 	"bytes"
@@ -14,8 +14,16 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 )
 
-// Command runs an external tool through the operation context, retaining stderr on failure.
-func Command(ctx opctx.Ctx, dir, program string, args ...string) error {
+// Run executes a tool through the operation context, retaining stderr on failure.
+func Run(ctx opctx.Ctx, dir, program string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("command cancelled:\n%w", err)
+	}
+
+	if ctx.DryRun() {
+		return nil
+	}
+
 	raw := exec.CommandContext(ctx, program, args...)
 	raw.Dir = dir
 	raw.Stdout = os.Stdout

@@ -22,6 +22,8 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testsource"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/cachekey"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/externalcmd"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/pythonenv"
 	"github.com/pelletier/go-toml/v2"
@@ -141,6 +143,10 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (result te
 		return result, err
 	}
 
+	if err = ctx.Err(); err != nil {
+		return result, fmt.Errorf("pytest execution cancelled:\n%w", err)
+	}
+
 	if ctx.DryRun() {
 		result.Status = testframework.Planned
 
@@ -161,7 +167,7 @@ func validateRequest(request testframework.RunRequest) error {
 		return errors.New("pytest JUnit path must be absolute")
 	}
 
-	if len(request.RPMPaths) > 0 && request.InputsPath == "" {
+	if len(request.RPMPaths()) > 0 && request.InputsPath == "" {
 		return errors.New("pytest candidate packages require an inputs manifest")
 	}
 
@@ -172,8 +178,29 @@ func validateRequest(request testframework.RunRequest) error {
 	return nil
 }
 
-func (r *Runner) execute(ctx opctx.Ctx, request testframework.RunRequest, result *testframework.RunResult) error {
-	workingDir, err := r.workingDir(ctx, request)
+func (r *Runner) execute(ctx opctx.Ctx, request testframework.RunRequest, result *testframework.RunResult) (err error) {
+	local, err := r.localSource(ctx, request)
+	if err != nil {
+		return err
+	}
+
+	privateDir, err := fileutils.MkdirTempInTempDir(ctx.FS(), "azldev-pytest-")
+	if err != nil {
+		return fmt.Errorf("create private pytest runtime:\n%w", err)
+	}
+
+	defer func() {
+		if cleanupErr := ctx.FS().RemoveAll(privateDir); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove private pytest runtime:\n%w", cleanupErr))
+			result.Status = testframework.Errored
+		}
+	}()
+
+	if err := testsource.CheckDestination(local, privateDir); err != nil {
+		return fmt.Errorf("validate pytest runtime destination:\n%w", err)
+	}
+
+	workingDir, err := r.workingDir(ctx, request, local, privateDir)
 	if err != nil {
 		return err
 	}
@@ -188,9 +215,7 @@ func (r *Runner) execute(ctx opctx.Ctx, request testframework.RunRequest, result
 		}
 	}
 
-	key := pythonenv.Key("pytest", r.name, workingDir, string(r.config.Install))
-
-	python, err := pythonenv.Ensure(ctx, filepath.Join(request.CacheDir, "python", key))
+	python, err := r.preparePython(ctx, request, privateDir)
 	if err != nil {
 		return fmt.Errorf("create pytest Python environment:\n%w", err)
 	}
@@ -199,7 +224,7 @@ func (r *Runner) execute(ctx opctx.Ctx, request testframework.RunRequest, result
 		return err
 	}
 
-	args, err := r.arguments(ctx.FS(), workingDir, request)
+	args, err := r.arguments(ctx.FS(), workingDir, local, filepath.Join(privateDir, "source"), request)
 	if err != nil {
 		return err
 	}
@@ -257,27 +282,39 @@ func runAndReport(
 	return err
 }
 
-func (r *Runner) workingDir(ctx opctx.Ctx, request testframework.RunRequest) (string, error) {
-	dir := r.config.WorkingDir
-	if r.config.Source != nil || request.Execution.SourceDir != "" {
-		root, err := testsource.Materialize(ctx, r.config.Source, request.Execution.SourceDir, request.CacheDir)
-		if err != nil {
-			return "", fmt.Errorf("materialize pytest source:\n%w", err)
-		}
-
-		if filepath.IsAbs(dir) {
-			dir = root
-		} else {
-			dir = filepath.Join(root, dir)
-		}
+func (r *Runner) localSource(ctx opctx.Ctx, request testframework.RunRequest) (string, error) {
+	if request.Execution.SourceDir != "" {
+		return request.Execution.SourceDir, nil
 	}
 
-	if dir == "" {
-		if r.config.Install != projectconfig.PytestInstallNone {
-			return "", errors.New("pytest dependency installation requires 'working-dir'")
-		}
-
+	if r.config.Source != nil {
 		return "", nil
+	}
+
+	if r.config.WorkingDir != "" {
+		return r.config.WorkingDir, nil
+	}
+
+	if r.config.Install != projectconfig.PytestInstallNone {
+		return "", errors.New("pytest dependency installation requires 'working-dir'")
+	}
+
+	dir, err := ctx.OSEnv().Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve pytest current directory:\n%w", err)
+	}
+
+	return dir, nil
+}
+
+func (r *Runner) workingDir(ctx opctx.Ctx, request testframework.RunRequest, local, privateDir string) (string, error) {
+	dir, err := testsource.Materialize(ctx, r.config.Source, local, filepath.Join(privateDir, "source"))
+	if err != nil {
+		return "", fmt.Errorf("materialize pytest source:\n%w", err)
+	}
+
+	if (r.config.Source != nil || request.Execution.SourceDir != "") && !filepath.IsAbs(r.config.WorkingDir) {
+		dir = filepath.Join(dir, r.config.WorkingDir)
 	}
 
 	exists, err := fileutils.DirExists(ctx.FS(), dir)
@@ -290,6 +327,49 @@ func (r *Runner) workingDir(ctx opctx.Ctx, request testframework.RunRequest) (st
 	}
 
 	return dir, nil
+}
+
+func (r *Runner) preparePython(ctx opctx.Ctx, request testframework.RunRequest, privateDir string) (string, error) {
+	if r.config.Install != projectconfig.PytestInstallNone {
+		python, err := pythonenv.Create(ctx, filepath.Join(privateDir, "python"))
+		if err != nil {
+			return "", fmt.Errorf("create private pytest environment:\n%w", err)
+		}
+
+		return python, nil
+	}
+
+	// Preserve the location used by successful, explicitly prepared 'install=none'
+	// environments. Never turn this opt-out into an implicit dependency install.
+	identity := r.config.WorkingDir
+	if r.config.Source != nil || request.Execution.SourceDir != "" {
+		root := request.Execution.SourceDir
+		if root == "" {
+			root = filepath.Join(request.CacheDir, "sources", cachekey.From(r.config.Source.GitURL, r.config.Source.Ref))
+		}
+
+		if filepath.IsAbs(identity) {
+			identity = root
+		} else {
+			identity = filepath.Join(root, identity)
+		}
+	}
+
+	key := cachekey.From("pytest", r.name, identity, string(r.config.Install))
+	dir := filepath.Join(request.CacheDir, "python", key)
+
+	python, err := pythonenv.Existing(ctx, dir)
+	if err == nil {
+		err = externalcmd.Run(ctx, privateDir, python, "-B", "-c",
+			"import sys; assert sys.prefix != sys.base_prefix, 'expected a virtual environment'; import pytest")
+	}
+
+	if err != nil {
+		return "", fmt.Errorf(
+			"pytest 'install=none' requires a caller-prepared environment with pytest at %#q:\n%w", dir, err)
+	}
+
+	return python, nil
 }
 
 func (r *Runner) install(ctx opctx.Ctx, python, dir string) error {
@@ -325,7 +405,9 @@ func (r *Runner) install(ctx opctx.Ctx, python, dir string) error {
 	return nil
 }
 
-func (r *Runner) arguments(fs opctx.FS, workingDir string, request testframework.RunRequest) ([]string, error) {
+func (r *Runner) arguments(
+	fs opctx.FS, workingDir, local, sourceCopy string, request testframework.RunRequest,
+) ([]string, error) {
 	properties := request.Properties
 	if properties == nil {
 		properties = map[string]string{}
@@ -337,19 +419,29 @@ func (r *Runner) arguments(fs opctx.FS, workingDir string, request testframework
 	}
 
 	replacer := strings.NewReplacer(
-		"{image-path}", request.ImagePath, "{image-name}", request.SubjectName,
+		"{image-path}", request.ImagePath(), "{image-name}", request.SubjectName,
 		"{subject-name}", request.SubjectName, "{inputs-path}", request.InputsPath,
 		"{capabilities}", strings.Join(request.Capabilities, ","), "{properties}", string(encoded),
 	)
 	args := []string{"-m", "pytest"}
 
 	for _, pattern := range r.config.TestPaths {
+		if filepath.IsAbs(pattern) && local != "" {
+			if relative, err := filepath.Rel(local, pattern); err == nil && !escapesCheckout(relative) {
+				pattern = filepath.Join(sourceCopy, relative)
+			}
+		}
+
 		args = append(args, expandGlob(fs, pattern, workingDir)...)
 	}
 
 	for _, arg := range r.config.ExtraArgs {
 		args = append(args, replacer.Replace(arg))
 	}
+
+	// Pytest can infer its root from absolute test selectors outside the working
+	// directory. Keep its own cache in the private copy in that case as well.
+	args = append(args, "-o", "cache_dir="+filepath.Join(workingDir, ".pytest_cache"))
 
 	if request.JUnitPath != "" {
 		args = append(args, "--junit-xml", request.JUnitPath)
@@ -385,10 +477,14 @@ func expandGlob(fs opctx.FS, pattern, dir string) []string {
 }
 
 func invoke(ctx opctx.Ctx, python, dir, inputs string, args []string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("pytest execution cancelled:\n%w", err)
+	}
+
 	raw := exec.CommandContext(ctx, python, args...)
 	raw.Dir = dir
 	raw.Stdout = os.Stdout
-	raw.Env = append(raw.Environ(), "AZLDEV_TEST_INPUTS="+inputs)
+	raw.Env = append(raw.Environ(), "AZLDEV_TEST_INPUTS="+inputs, "PYTHONDONTWRITEBYTECODE=1")
 
 	var stderr bytes.Buffer
 

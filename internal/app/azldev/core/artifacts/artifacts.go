@@ -5,15 +5,10 @@
 package artifacts
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
-	"net/url"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -22,14 +17,12 @@ import (
 	"time"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
-	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
-	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/downloader"
-	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/externalcmd"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/prereqs"
-	"github.com/microsoft/azure-linux-dev-tools/internal/utils/pythonenv"
 )
 
 type Selection struct {
@@ -63,78 +56,14 @@ func (s Selection) Validate() error {
 	return nil
 }
 
-// Artifact records both the consumed bytes and their provenance. BuiltAt is never inferred from download time.
-type Artifact struct {
-	Path       string    `json:"path"`
-	Source     string    `json:"source"`
-	URI        string    `json:"uri,omitempty"`
-	SHA256     string    `json:"sha256,omitempty"`
-	Format     string    `json:"format,omitempty"`
-	Arch       string    `json:"arch"`
-	BuiltAt    time.Time `json:"builtAt,omitempty"`
-	ModifiedAt time.Time `json:"modifiedAt,omitempty"`
-}
+type Artifact = artifact.Artifact
 
-type BuildRecord struct {
-	Name    string    `json:"name"`
-	Kind    string    `json:"kind"`
-	Arch    string    `json:"arch"`
-	BuiltAt time.Time `json:"builtAt"`
-	Paths   []string  `json:"paths"`
-}
-
-// Resolver delegates building to application services, avoiding command-package dependencies.
+// Resolver delegates building to services that publish their normal build manifests.
 type Resolver struct {
 	Env           *azldev.Env
 	Downloader    downloader.Downloader
 	BuildImage    func(name, arch string) ([]string, error)
 	BuildPackages func(name, arch string) ([]string, error)
-}
-
-func recordPath(output, kind, name, arch string) string {
-	return filepath.Join(output, "build-records", kind, name, arch+".json")
-}
-
-// RecordBuild persists exact output membership only after a successful build.
-func RecordBuild(ctx opctx.Ctx, output string, record BuildRecord) error {
-	if ctx.DryRun() {
-		return nil
-	}
-
-	if err := testframework.ValidateName(record.Name); err != nil {
-		return fmt.Errorf("record build:\n%w", err)
-	}
-
-	if !slices.Contains([]string{"image", "component"}, record.Kind) ||
-		!slices.Contains(projectconfig.SupportedImageArchitectures(), record.Arch) {
-		return errors.New("invalid build record kind or architecture")
-	}
-
-	if len(record.Paths) == 0 {
-		return errors.New("cannot record a build with no outputs")
-	}
-
-	for _, path := range record.Paths {
-		if !filepath.IsAbs(path) {
-			return fmt.Errorf("build output path must be absolute: %#q", path)
-		}
-	}
-
-	path := recordPath(output, record.Kind, record.Name, record.Arch)
-	if err := fileutils.MkdirAll(ctx.FS(), filepath.Dir(path)); err != nil {
-		return fmt.Errorf("record build:\n%w", err)
-	}
-
-	data, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return fmt.Errorf("record build:\n%w", err)
-	}
-
-	if err := fileutils.WriteFile(ctx.FS(), path, data, fileperms.PrivateFile); err != nil {
-		return fmt.Errorf("write build record:\n%w", err)
-	}
-
-	return nil
 }
 
 func (r *Resolver) Image(name, arch string, formats []string, selection Selection,
@@ -190,11 +119,6 @@ func (r *Resolver) Image(name, arch string, formats []string, selection Selectio
 		}
 
 		builtAt = time.Now().UTC()
-		if err := RecordBuild(r.Env, r.Env.OutputDir(), BuildRecord{
-			Name: name, Kind: "image", Arch: arch, BuiltAt: builtAt, Paths: paths,
-		}); err != nil {
-			return Artifact{}, err
-		}
 	}
 
 	return r.selectImage(paths, arch, formats, "local", builtAt)
@@ -249,11 +173,6 @@ func (r *Resolver) Packages(name, arch string, selection Selection,
 		}
 
 		builtAt = time.Now().UTC()
-		if err := RecordBuild(r.Env, r.Env.OutputDir(), BuildRecord{
-			Name: name, Kind: "component", Arch: arch, BuiltAt: builtAt, Paths: paths,
-		}); err != nil {
-			return nil, err
-		}
 	}
 
 	result := make([]Artifact, 0, len(paths))
@@ -274,7 +193,7 @@ func (r *Resolver) Packages(name, arch string, selection Selection,
 }
 
 func (r *Resolver) validate(name, arch string, selection Selection) error {
-	if err := testframework.ValidateName(name); err != nil {
+	if err := artifact.ValidateName(name); err != nil {
 		return fmt.Errorf("validate:\n%w", err)
 	}
 
@@ -294,7 +213,7 @@ func (r *Resolver) local(kind, name, arch string, rebuild bool) ([]string, time.
 		return nil, time.Time{}, nil
 	}
 
-	data, err := fileutils.ReadFile(r.Env.FS(), recordPath(r.Env.OutputDir(), kind, name, arch))
+	data, err := fileutils.ReadFile(r.Env.FS(), artifact.RecordPath(r.Env.OutputDir(), kind, name, arch))
 	if err == nil {
 		return r.readRecord(data, kind, name, arch)
 	}
@@ -500,63 +419,6 @@ func HumanAge(age time.Duration) string {
 	return "less than a second ago"
 }
 
-func (r *Resolver) fetch(uri, digest, format, arch string) (Artifact, error) {
-	if strings.HasPrefix(uri, "docker://") {
-		return r.pullContainer(strings.TrimPrefix(uri, "docker://"), arch)
-	}
-
-	location, err := url.Parse(uri)
-	if err != nil || (location.Scheme != "https" && location.Scheme != "http") || location.Host == "" {
-		return Artifact{}, fmt.Errorf("invalid artifact download URL %#q", uri)
-	}
-
-	filename := filepath.Base(location.Path)
-	if filename == "." || filename == "/" {
-		return Artifact{}, fmt.Errorf("artifact URL has no filename: %#q", uri)
-	}
-
-	cache := filepath.Join(r.Env.WorkDir(), "artifacts", pythonenv.Key(uri, digest, arch), filename)
-	if r.Env.DryRun() {
-		slog.Info("Would fetch LKG artifact", "uri", uri, "path", cache)
-
-		return Artifact{Path: cache, Source: "lkg", URI: uri, Format: format, Arch: arch}, nil
-	}
-
-	if err := r.download(uri, digest, cache); err != nil {
-		return Artifact{}, fmt.Errorf("fetch:\n%w", err)
-	}
-
-	actual, err := hashFile(r.Env.FS(), cache)
-	if err != nil {
-		return Artifact{}, fmt.Errorf("fetch:\n%w", err)
-	}
-
-	if digest != "" && !strings.EqualFold(digest, actual) {
-		return Artifact{}, fmt.Errorf("SHA-256 mismatch for %#q: expected %s, got %s", uri, digest, actual)
-	}
-
-	artifact, err := r.describe(cache, format, arch, "lkg", time.Time{})
-	artifact.URI, artifact.SHA256 = uri, actual
-	slog.Info("Resolved LKG artifact", "uri", uri, "sha256", actual, "build-age", "unknown")
-
-	return artifact, err
-}
-
-func hashFile(files opctx.FS, path string) (string, error) {
-	file, err := files.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("hash file:\n%w", err)
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", fmt.Errorf("hash file:\n%w", err)
-	}
-
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
 func (r *Resolver) pullContainer(reference, arch string) (Artifact, error) {
 	result := Artifact{Path: reference, URI: "docker://" + reference, Source: "lkg", Format: "oci", Arch: arch}
 	if r.Env.DryRun() {
@@ -574,7 +436,7 @@ func (r *Resolver) pullContainer(reference, arch string) (Artifact, error) {
 		ociArch = "arm64"
 	}
 
-	if err := testframework.Command(r.Env, "", "podman", "pull", "--arch", ociArch, reference); err != nil {
+	if err := externalcmd.Run(r.Env, "", "podman", "pull", "--arch", ociArch, reference); err != nil {
 		return Artifact{}, fmt.Errorf("pull container:\n%w", err)
 	}
 

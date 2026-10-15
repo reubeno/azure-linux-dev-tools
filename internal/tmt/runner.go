@@ -5,22 +5,25 @@ package tmt
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testsource"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/prereqs"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/pythonenv"
 )
 
-// Keep CLI and plugin behavior stable; update only after validating the new release.
-const tmtVersion = "1.78.0"
+//go:embed requirements.txt
+var requirements []byte
 
 // Run executes a plan without taking ownership of a caller's source tree or SSH machine.
 func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (testframework.RunResult, error) {
@@ -55,7 +58,7 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (testframe
 	return result, err
 }
 
-func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir string) error {
+func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir string) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("TMT execution cancelled:\n%w", err)
 	}
@@ -72,7 +75,19 @@ func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir 
 		return err
 	}
 
-	runDir, err := testsource.Materialize(ctx, r.config.Source, request.Execution.SourceDir, request.CacheDir)
+	privateDir, err := fileutils.MkdirTempInTempDir(ctx.FS(), "azldev-tmt-")
+	if err != nil {
+		return fmt.Errorf("create private TMT runtime:\n%w", err)
+	}
+
+	defer func() {
+		if cleanupErr := ctx.FS().RemoveAll(privateDir); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove private TMT runtime:\n%w", cleanupErr))
+		}
+	}()
+
+	runDir, err := testsource.Materialize(ctx, r.config.Source, request.Execution.SourceDir,
+		filepath.Join(privateDir, "source"))
 	if err != nil {
 		return fmt.Errorf("materialize TMT source:\n%w", err)
 	}
@@ -81,7 +96,7 @@ func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir 
 		return err
 	}
 
-	program, err := prepareEnvironment(ctx, request)
+	program, err := prepareEnvironment(ctx, request, privateDir)
 	if err != nil {
 		return err
 	}
@@ -91,29 +106,42 @@ func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir 
 		return err
 	}
 
-	var hardware []string
-
-	if request.Execution.Strategy == testframework.VM {
-		hardware, err = resolvedPlanHardwareArgs(ctx, runDir, program, r.plan(request.Execution))
-		if err != nil {
-			return fmt.Errorf("resolve TMT plan hardware:\n%w", err)
-		}
+	args, err := r.prepareArguments(ctx, request, runDir, program, outputDir)
+	if err != nil {
+		return err
 	}
-
-	if request.Execution.Strategy == testframework.Container && filepath.IsAbs(request.ImagePath) {
-		request.ImagePath, err = importContainerImage(ctx, request.ImagePath)
-		if err != nil {
-			return err
-		}
-	}
-
-	args := runArgs(r.plan(request.Execution), request, outputDir, hardware)
 
 	if err := runTMTCommand(ctx, runDir, pluginDir, program, request.Execution.Strategy, args...); err != nil {
 		return fmt.Errorf("run TMT (artifacts: %#q):\n%w", outputDir, err)
 	}
 
 	return nil
+}
+
+func (r *Runner) prepareArguments(ctx opctx.Ctx, request testframework.RunRequest,
+	runDir, program, outputDir string,
+) ([]string, error) {
+	var (
+		hardware []string
+		err      error
+	)
+
+	if request.Execution.Strategy == testframework.VM {
+		hardware, err = resolvedPlanHardwareArgs(ctx, runDir, program, r.plan(request.Execution))
+		if err != nil {
+			return nil, fmt.Errorf("resolve TMT plan hardware:\n%w", err)
+		}
+	}
+
+	imageArgument := request.ImagePath()
+	if request.Execution.Strategy == testframework.Container && filepath.IsAbs(imageArgument) {
+		imageArgument, err = importContainerImage(ctx, imageArgument)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return runArgs(r.plan(request.Execution), request, outputDir, hardware, imageArgument), nil
 }
 
 func (r *Runner) validateRequest(request testframework.RunRequest) error {
@@ -129,21 +157,17 @@ func (r *Runner) validateRequest(request testframework.RunRequest) error {
 			return fmt.Errorf("TMT %s directory must be absolute", directory.name)
 		}
 
-		if request.Execution.SourceDir != "" && dirsOverlap(request.Execution.SourceDir, directory.path) {
+		if directory.name == "work" && request.Execution.SourceDir != "" &&
+			dirsOverlap(request.Execution.SourceDir, directory.path) {
 			return fmt.Errorf("TMT source and %s directories must not overlap", directory.name)
 		}
 	}
 
-	if requirements.ImageRequired {
-		if !filepath.IsAbs(request.ImagePath) &&
-			(request.Execution.Strategy != testframework.Container || !isContainerImageID(request.ImagePath)) {
-			return errors.New("TMT image path must be absolute, or a local image ID for strategy 'container'")
-		}
-	} else if request.ImagePath != "" {
-		return fmt.Errorf("TMT strategy %#q does not accept an image", request.Execution.Strategy)
+	if err := validateImage(request, requirements); err != nil {
+		return err
 	}
 
-	for _, rpm := range request.RPMPaths {
+	for _, rpm := range request.RPMPaths() {
 		if !filepath.IsAbs(rpm) {
 			return fmt.Errorf("candidate RPM path must be absolute: %#q", rpm)
 		}
@@ -152,10 +176,32 @@ func (r *Runner) validateRequest(request testframework.RunRequest) error {
 	return nil
 }
 
+func validateImage(request testframework.RunRequest, requirements testframework.Requirements) error {
+	if !requirements.ImageRequired {
+		if request.Image != nil {
+			return fmt.Errorf("TMT strategy %#q does not accept an image", request.Execution.Strategy)
+		}
+
+		return nil
+	}
+
+	if request.Image != nil && !slices.Contains(requirements.ImageFormats, request.Image.Format) {
+		return fmt.Errorf("TMT strategy %#q does not support image format %#q",
+			request.Execution.Strategy, request.Image.Format)
+	}
+
+	if !filepath.IsAbs(request.ImagePath()) &&
+		(request.Execution.Strategy != testframework.Container || !isContainerImageID(request.ImagePath())) {
+		return errors.New("TMT image path must be absolute, or a local image ID for strategy 'container'")
+	}
+
+	return nil
+}
+
 func validateFiles(ctx opctx.Ctx, request testframework.RunRequest) error {
-	paths := append([]string{}, request.RPMPaths...)
-	if filepath.IsAbs(request.ImagePath) {
-		paths = append(paths, request.ImagePath)
+	paths := append([]string{}, request.RPMPaths()...)
+	if filepath.IsAbs(request.ImagePath()) {
+		paths = append(paths, request.ImagePath())
 	}
 
 	if request.Execution.SSHKey != "" {
@@ -211,21 +257,30 @@ func validateSource(ctx opctx.Ctx, sourceDir string) error {
 	return nil
 }
 
-func prepareEnvironment(ctx opctx.Ctx, request testframework.RunRequest) (string, error) {
-	requirement := "tmt==" + tmtVersion
+func prepareEnvironment(ctx opctx.Ctx, request testframework.RunRequest, privateDir string) (string, error) {
+	requirement := "tmt"
 	if request.Execution.Strategy == testframework.VM {
-		requirement = "tmt[provision-virtual]==" + tmtVersion
+		requirement = "tmt[provision-virtual]"
 	}
 
-	venvDir := filepath.Join(request.CacheDir, "tmt", pythonenv.Key(requirement), "venv")
+	venvDir := filepath.Join(privateDir, "venv")
 
-	python, err := pythonenv.Ensure(ctx, venvDir)
+	python, err := pythonenv.Create(ctx, venvDir)
 	if err != nil {
 		return "", fmt.Errorf("create TMT environment:\n%w", err)
 	}
 
-	if err := pythonenv.Install(ctx, python, "", requirement); err != nil {
+	constraints := filepath.Join(privateDir, "requirements.txt")
+	if err := fileutils.WriteFile(ctx.FS(), constraints, requirements, fileperms.PrivateFile); err != nil {
+		return "", fmt.Errorf("write TMT dependency constraints:\n%w", err)
+	}
+
+	if err := pythonenv.Install(ctx, python, "", "--constraint", constraints, requirement); err != nil {
 		return "", fmt.Errorf("install TMT:\n%w", err)
+	}
+
+	if err := pythonenv.Freeze(ctx, python, filepath.Join(request.WorkDir, "python-environment.txt")); err != nil {
+		return "", fmt.Errorf("record TMT runtime:\n%w", err)
 	}
 
 	return filepath.Join(venvDir, "bin", "tmt"), nil

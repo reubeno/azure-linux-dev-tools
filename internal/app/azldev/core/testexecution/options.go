@@ -38,6 +38,10 @@ func (o Options) hasSSHOptions() bool {
 	return o.SSHHost != "" || o.SSHUser != "" || o.SSHKey != "" || o.SSHPort != 0
 }
 
+func (o Options) hasBaseOptions() bool {
+	return o.BaseImage != "" || o.BaseImagePath != "" || o.RebuildBaseImage || o.BaseImageSource != ""
+}
+
 func (o Options) subjectSelection(kind string) artifacts.Selection {
 	result := artifacts.Selection{Source: o.ArtifactSource, Rebuild: o.Rebuild}
 	if kind == "component" {

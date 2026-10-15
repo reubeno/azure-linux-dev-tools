@@ -4,6 +4,10 @@
 package pythonenv_test
 
 import (
+	"context"
+	"errors"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testutils"
@@ -14,21 +18,74 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEnsureCreatesAndReusesEnvironment(t *testing.T) {
+func TestCreateRejectsExistingEnvironments(t *testing.T) {
 	env := testutils.NewTestEnv(t)
 	env.CmdFactory.RegisterCommandInSearchPath("python3")
-	python, err := pythonenv.Ensure(env.Env, "/cache/venv")
+	python, err := pythonenv.Create(env.Env, "/run/venv")
 	require.NoError(t, err)
-	assert.Equal(t, "/cache/venv/bin/python3", python)
+	assert.Equal(t, "/run/venv/bin/python3", python)
 	require.Len(t, env.CommandsExecuted, 1)
-	assert.Equal(t, []string{"python3", "-m", "venv", "/cache/venv"}, env.CommandsExecuted[0])
+	assert.Equal(t, []string{"python3", "-m", "venv", "/run/venv"}, env.CommandsExecuted[0])
+	require.NoError(t, fileutils.MkdirAll(env.TestFS, filepath.Dir(python)))
 	require.NoError(t, fileutils.WriteFile(env.TestFS, python, nil, fileperms.PrivateFile))
-	_, err = pythonenv.Ensure(env.Env, "/cache/venv")
-	require.NoError(t, err)
+	_, err = pythonenv.Create(env.Env, "/run/venv")
+	require.Error(t, err)
 	assert.Len(t, env.CommandsExecuted, 1)
+	exists, err := fileutils.Exists(env.TestFS, python)
+	require.NoError(t, err)
+	assert.True(t, exists)
 }
 
-func TestCacheKeysIncludeAllInputs(t *testing.T) {
-	assert.NotEqual(t, pythonenv.Key("ab", "c"), pythonenv.Key("a", "bc"))
-	assert.NotEqual(t, pythonenv.Key("tool", "v1"), pythonenv.Key("tool", "v2"))
+func TestFailedOrCancelledCreationCannotPoisonNextAttempt(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "failure", true: "cancellation"}[cancelled], func(t *testing.T) {
+			env := testutils.NewTestEnv(t)
+
+			ctx, cancel := env.Env.WithCancel()
+			defer cancel()
+
+			env.CmdFactory.RegisterCommandInSearchPath("python3")
+			env.CmdFactory.RunHandler = func(_ *exec.Cmd) error {
+				require.NoError(t, fileutils.MkdirAll(env.TestFS, "/run/venv/bin"))
+				require.NoError(t, fileutils.WriteFile(env.TestFS, "/run/venv/bin/python3", nil, fileperms.PrivateFile))
+
+				if cancelled {
+					cancel()
+
+					return nil
+				}
+
+				return errors.New("partial venv")
+			}
+			_, err := pythonenv.Create(ctx, "/run/venv")
+			require.Error(t, err)
+
+			if cancelled {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+
+			exists, err := fileutils.Exists(env.TestFS, "/run/venv")
+			require.NoError(t, err)
+			assert.False(t, exists)
+
+			env.CmdFactory.RunHandler = nil
+			_, err = pythonenv.Create(env.Env, "/run/venv")
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestExistingRequiresCompleteCallerEnvironmentWithoutCommands(t *testing.T) {
+	env := testutils.NewTestEnv(t)
+	_, err := pythonenv.Existing(env.Env, "/caller/venv")
+	require.ErrorContains(t, err, "missing or incomplete")
+	require.NoError(t, fileutils.MkdirAll(env.TestFS, "/caller/venv/bin"))
+	require.NoError(t, fileutils.WriteFile(env.TestFS, "/caller/venv/bin/python3", nil, fileperms.PrivateFile))
+	_, err = pythonenv.Existing(env.Env, "/caller/venv")
+	require.ErrorContains(t, err, "missing or incomplete")
+	require.NoError(t, fileutils.WriteFile(env.TestFS, "/caller/venv/pyvenv.cfg", nil, fileperms.PrivateFile))
+	python, err := pythonenv.Existing(env.Env, "/caller/venv")
+	require.NoError(t, err)
+	assert.Equal(t, "/caller/venv/bin/python3", python)
+	assert.Empty(t, env.CommandsExecuted)
 }

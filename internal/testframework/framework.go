@@ -7,10 +7,9 @@ package testframework
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 )
 
@@ -72,14 +71,33 @@ type Requirements struct {
 type RunRequest struct {
 	Execution    ExecutionSpec
 	SubjectName  string
-	ImagePath    string
-	RPMPaths     []string
+	Image        *artifact.Artifact
+	Packages     []artifact.Artifact
 	Capabilities []string
 	Properties   map[string]string
 	WorkDir      string
 	CacheDir     string
 	JUnitPath    string
 	InputsPath   string
+}
+
+// ImagePath returns the native file or image handle while retaining its metadata in Image.
+func (r RunRequest) ImagePath() string {
+	if r.Image == nil {
+		return ""
+	}
+
+	return r.Image.Path
+}
+
+// RPMPaths returns the native package arguments without discarding their provenance.
+func (r RunRequest) RPMPaths() []string {
+	paths := make([]string, 0, len(r.Packages))
+	for _, pkg := range r.Packages {
+		paths = append(paths, pkg.Path)
+	}
+
+	return paths
 }
 
 type Status string
@@ -102,7 +120,7 @@ type RunResult struct {
 	Duration  time.Duration `json:"duration"`
 	OutputDir string        `json:"outputDir"`
 	JUnitPath string        `json:"junitPath,omitempty"`
-	Error     string        `json:"error,omitempty"`
+	Error     string        `json:"error,omitempty"     table:"-"`
 }
 
 // ErrTestFailed distinguishes failing assertions from setup and execution errors.
@@ -118,9 +136,8 @@ type Runner interface {
 
 // ValidateName keeps managed test directories below their run directory.
 func ValidateName(name string) error {
-	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) ||
-		filepath.Clean(name) != name || strings.ContainsAny(name, `/\`) {
-		return fmt.Errorf("invalid test name %#q: expected a simple name without path separators", name)
+	if err := artifact.ValidateName(name); err != nil {
+		return fmt.Errorf("invalid test name:\n%w", err)
 	}
 
 	return nil

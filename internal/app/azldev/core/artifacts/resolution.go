@@ -14,9 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
-	"github.com/microsoft/azure-linux-dev-tools/internal/utils/downloader"
-	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 )
 
 func (r *Resolver) publishedImage(name, arch string, formats []string,
@@ -60,7 +59,7 @@ func (r *Resolver) publishedPackages(name, arch string,
 }
 
 func (r *Resolver) readRecord(data []byte, kind, name, arch string) ([]string, time.Time, error) {
-	var record BuildRecord
+	var record artifact.BuildRecord
 	if err := json.Unmarshal(data, &record); err != nil {
 		return nil, time.Time{}, fmt.Errorf("invalid build record for %#q:\n%w", name, err)
 	}
@@ -112,29 +111,4 @@ func (r *Resolver) rpmIdentity(path string) (sourceRPM, arch string, err error) 
 	}
 
 	return sourceRPM, arch, nil
-}
-
-func (r *Resolver) download(uri, digest, cache string) error {
-	download := r.Downloader
-	if download == nil {
-		var err error
-
-		download, err = downloader.NewHTTPDownloader(r.Env, r.Env, r.Env.FS())
-		if err != nil {
-			return fmt.Errorf("create artifact downloader:\n%w", err)
-		}
-	}
-
-	exists, err := fileutils.Exists(r.Env.FS(), cache)
-	if err != nil {
-		return fmt.Errorf("check artifact cache:\n%w", err)
-	}
-	// Mutable LKG URLs must be refreshed; only a digest makes cache reuse safe.
-	if digest == "" || !exists {
-		if err := download.Download(r.Env, uri, cache); err != nil {
-			return fmt.Errorf("download artifact %#q:\n%w", uri, err)
-		}
-	}
-
-	return nil
 }

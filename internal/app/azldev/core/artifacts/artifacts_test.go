@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/artifacts"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testutils"
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
@@ -30,6 +32,10 @@ func TestLocalImageReuseBuildAndForceRebuild(t *testing.T) {
 		for _, path := range paths {
 			require.NoError(t, fileutils.WriteFile(env.TestFS, path, []byte("image"), fileperms.PrivateFile))
 		}
+
+		require.NoError(t, artifact.RecordBuild(env.Env, env.Env.OutputDir(), artifact.BuildRecord{
+			Name: name, Kind: "image", Arch: arch, BuiltAt: time.Now(), Paths: paths,
+		}))
 
 		return paths, nil
 	}}
@@ -74,18 +80,58 @@ func TestExplicitPathsAndAmbiguousImages(t *testing.T) {
 }
 
 type fakeDownloader struct {
-	env   *testutils.TestEnv
-	count int
+	env     *testutils.TestEnv
+	count   int
+	content string
 }
 
 func (d *fakeDownloader) Download(_ context.Context, _ string, path string) error {
 	d.count++
 
-	return fileutils.WriteFile(d.env.TestFS, path, []byte("image"), fileperms.PrivateFile)
+	content := d.content
+	if content == "" {
+		content = "image"
+	}
+
+	return fileutils.WriteFile(d.env.TestFS, path, []byte(content), fileperms.PrivateFile)
 }
 
 func (*fakeDownloader) FetchStream(context.Context, string) (io.ReadCloser, error) {
 	return nil, errors.New("unexpected stream request")
+}
+
+func TestPublishedFormatDoesNotDependOnURLSuffix(t *testing.T) {
+	env := testutils.NewTestEnv(t)
+	resolver := artifacts.Resolver{Env: env.Env, Downloader: &fakeDownloader{env: env}}
+	distro := projectconfig.DistroVersionDefinition{Images: map[string]projectconfig.PublishedImage{
+		"base": {Architectures: map[string][]projectconfig.PublishedImageArtifact{
+			"x86_64": {{Format: "qcow2", URI: "https://example.test/download?build=123"}},
+		}},
+	}}
+	got, err := resolver.Image("base", "x86_64", []string{"qcow2"}, artifacts.Selection{Source: "lkg"}, distro)
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(got.Path, ".qcow2"), got.Path)
+}
+
+func TestRefreshingLKGDoesNotReplaceEarlierRunInput(t *testing.T) {
+	env := testutils.NewTestEnv(t)
+	download := &fakeDownloader{env: env, content: "first image"}
+	resolver := artifacts.Resolver{Env: env.Env, Downloader: download}
+	distro := projectconfig.DistroVersionDefinition{Images: map[string]projectconfig.PublishedImage{
+		"base": {Architectures: map[string][]projectconfig.PublishedImageArtifact{
+			"x86_64": {{Format: "qcow2", URI: "https://example.test/lkg.qcow2"}},
+		}},
+	}}
+	first, err := resolver.Image("base", "x86_64", []string{"qcow2"}, artifacts.Selection{Source: "lkg"}, distro)
+	require.NoError(t, err)
+
+	download.content = "new image"
+	second, err := resolver.Image("base", "x86_64", []string{"qcow2"}, artifacts.Selection{Source: "lkg"}, distro)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Path, second.Path)
+	content, err := fileutils.ReadFile(env.TestFS, first.Path)
+	require.NoError(t, err)
+	assert.Equal(t, "first image", string(content))
 }
 
 func TestPublishedImageResolutionAndDigest(t *testing.T) {
@@ -107,7 +153,7 @@ func TestPublishedImageResolutionAndDigest(t *testing.T) {
 
 	assert.Equal(t, 2, download.count, "mutable LKG locations must be refreshed")
 
-	distro.Images["base"].Architectures["x86_64"][0].SHA256 = "incorrect"
+	distro.Images["base"].Architectures["x86_64"][0].SHA256 = strings.Repeat("0", 64)
 	_, err := resolver.Image("base", "x86_64", []string{"qcow2"}, artifacts.Selection{Source: "lkg"}, distro)
 	require.ErrorContains(t, err, "SHA-256 mismatch")
 	_, err = resolver.Image("base", "aarch64", []string{"qcow2"}, artifacts.Selection{Source: "lkg"}, distro)
@@ -135,12 +181,16 @@ func TestCompletePackageBuildIsReusedAndMissingOutputsRebuild(t *testing.T) {
 	builds := 0
 	paths := []string{"/output/rpms/base/curl-1-1.x86_64.rpm", "/output/rpms/base/libcurl-1-1.x86_64.rpm"}
 
-	resolver := artifacts.Resolver{Env: env.Env, BuildPackages: func(_, _ string) ([]string, error) {
+	resolver := artifacts.Resolver{Env: env.Env, BuildPackages: func(name, arch string) ([]string, error) {
 		builds++
 
 		for _, path := range paths {
 			require.NoError(t, fileutils.WriteFile(env.TestFS, path, []byte("rpm"), fileperms.PrivateFile))
 		}
+
+		require.NoError(t, artifact.RecordBuild(env.Env, env.Env.OutputDir(), artifact.BuildRecord{
+			Name: name, Kind: "component", Arch: arch, BuiltAt: time.Now(), Paths: paths,
+		}))
 
 		return paths, nil
 	}}
@@ -161,7 +211,7 @@ func TestCompletePackageBuildIsReusedAndMissingOutputsRebuild(t *testing.T) {
 
 func TestRecordRejectsPathTraversal(t *testing.T) {
 	env := testutils.NewTestEnv(t)
-	require.Error(t, artifacts.RecordBuild(env.Env, "/output", artifacts.BuildRecord{
+	require.Error(t, artifact.RecordBuild(env.Env, "/output", artifact.BuildRecord{
 		Name: "../outside", Kind: "component", Arch: "x86_64", Paths: []string{"/pkg.rpm"},
 	}))
 }

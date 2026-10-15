@@ -17,6 +17,7 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testsource"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/externalcmd"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/prereqs"
@@ -74,20 +75,22 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (result te
 		return result, err
 	}
 
+	if err = ctx.Err(); err != nil {
+		return result, fmt.Errorf("LISA execution cancelled:\n%w", err)
+	}
+
 	if ctx.DryRun() {
 		result.Status = testframework.Planned
 
 		return result, nil
 	}
 
-	sourceDir, err := testsource.Materialize(ctx, r.config.Source, request.Execution.FrameworkDir, request.CacheDir)
-	if err != nil {
-		return result, fmt.Errorf("materialize LISA framework:\n%w", err)
+	if err = testsource.CheckDestination(request.Execution.FrameworkDir, request.WorkDir); err != nil {
+		return result, fmt.Errorf("LISA run directory must not overlap the framework checkout:\n%w", err)
 	}
 
-	if relative, relErr := filepath.Rel(sourceDir, request.WorkDir); relErr == nil &&
-		relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return result, errors.New("LISA run directory must not be inside the framework checkout")
+	if err = validateFrameworkDirectory(ctx, request.Execution.FrameworkDir); err != nil {
+		return result, err
 	}
 
 	if err = fileutils.MkdirAll(ctx.FS(), request.WorkDir); err != nil {
@@ -106,23 +109,39 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (result te
 		}
 	}()
 
-	// Editable pip installations can write build metadata into the source tree.
-	// Use a per-run copy so neither cached nor caller-owned checkouts are modified.
-	frameworkDir := filepath.Join(privateDir, "framework")
-	if err = fileutils.CopyDirRecursive(ctx, ctx.FS(), sourceDir, frameworkDir, fileutils.CopyDirOptions{}); err != nil {
-		return result, fmt.Errorf("copy LISA framework:\n%w", err)
+	frameworkDir, err := testsource.Materialize(ctx, r.config.Source, request.Execution.FrameworkDir,
+		filepath.Join(privateDir, "framework"))
+	if err != nil {
+		return result, fmt.Errorf("materialize LISA framework:\n%w", err)
 	}
 
-	err = r.execute(ctx, sourceDir, frameworkDir, privateDir, request, &result)
+	err = r.execute(ctx, frameworkDir, privateDir, request, &result)
 
 	return result, err
 }
 
+func validateFrameworkDirectory(ctx opctx.Ctx, dir string) error {
+	if dir == "" {
+		return nil
+	}
+
+	exists, err := fileutils.DirExists(ctx.FS(), dir)
+	if err != nil {
+		return fmt.Errorf("check LISA framework:\n%w", err)
+	}
+
+	if !exists {
+		return fmt.Errorf("LISA framework directory %#q does not exist", dir)
+	}
+
+	return nil
+}
+
 func (r *Runner) execute(
-	ctx opctx.Ctx, sourceDir, frameworkDir, privateDir string,
+	ctx opctx.Ctx, frameworkDir, privateDir string,
 	request testframework.RunRequest, result *testframework.RunResult,
 ) error {
-	python, err := r.preparePython(ctx, sourceDir, frameworkDir)
+	python, err := r.preparePython(ctx, frameworkDir)
 	if err != nil {
 		return err
 	}
@@ -134,7 +153,7 @@ func (r *Runner) execute(
 	}
 
 	keyArgs := []string{"-t", "rsa", "-b", "4096", "-f", keyPath, "-N", "", "-q"}
-	if err := testframework.Command(ctx, privateDir, "ssh-keygen", keyArgs...); err != nil {
+	if err := externalcmd.Run(ctx, privateDir, "ssh-keygen", keyArgs...); err != nil {
 		return fmt.Errorf("generate LISA admin key:\n%w", err)
 	}
 
@@ -147,7 +166,7 @@ func (r *Runner) execute(
 		return err
 	}
 
-	if err := writeCandidateScript(ctx.FS(), privateDir, request.RPMPaths); err != nil {
+	if err := writeCandidateScript(ctx.FS(), privateDir, request.RPMPaths()); err != nil {
 		return err
 	}
 
@@ -165,7 +184,7 @@ func (r *Runner) execute(
 		return fmt.Errorf("remove previous LISA report:\n%w", removeErr)
 	}
 
-	runErr := testframework.Command(ctx, request.WorkDir, filepath.Join(filepath.Dir(python), "lisa"), args...)
+	runErr := externalcmd.Run(ctx, request.WorkDir, filepath.Join(filepath.Dir(python), "lisa"), args...)
 
 	return finishRun(ctx, request.JUnitPath, runErr, result)
 }
@@ -208,11 +227,11 @@ func validateRequest(request testframework.RunRequest) error {
 		return errors.New("LISA requires absolute work, cache, and JUnit paths")
 	}
 
-	if !filepath.IsAbs(request.ImagePath) || !strings.EqualFold(filepath.Ext(request.ImagePath), ".qcow2") {
+	if !filepath.IsAbs(request.ImagePath()) || request.Image == nil || request.Image.Format != "qcow2" {
 		return errors.New("LISA requires an absolute path to a qcow2 image")
 	}
 
-	for _, path := range request.RPMPaths {
+	for _, path := range request.RPMPaths() {
 		if !filepath.IsAbs(path) || !strings.EqualFold(filepath.Ext(path), ".rpm") {
 			return fmt.Errorf("LISA candidate package must be an absolute RPM path: %#q", path)
 		}
@@ -234,12 +253,10 @@ func writeCandidateScript(files opctx.FS, privateDir string, rpms []string) erro
 	return nil
 }
 
-func (r *Runner) preparePython(ctx opctx.Ctx, sourceDir, frameworkDir string) (string, error) {
-	key := pythonenv.Key("lisa", sourceDir,
-		strings.Join(r.config.PipPreInstall, "\x00"), strings.Join(r.config.PipExtras, "\x00"))
+func (r *Runner) preparePython(ctx opctx.Ctx, frameworkDir string) (string, error) {
 	// The editable install points at this private copy. Sharing its environment
 	// would let concurrent runs redirect each other's imports or remove them.
-	python, err := pythonenv.Ensure(ctx, filepath.Join(filepath.Dir(frameworkDir), "python", key))
+	python, err := pythonenv.Create(ctx, filepath.Join(filepath.Dir(frameworkDir), "python"))
 	if err != nil {
 		return "", fmt.Errorf("create LISA Python environment:\n%w", err)
 	}
@@ -274,7 +291,7 @@ func (r *Runner) arguments(runbookPath string, request testframework.RunRequest)
 	}
 
 	replacer := strings.NewReplacer(
-		"{image-path}", request.ImagePath, "{image-name}", request.SubjectName,
+		"{image-path}", request.ImagePath(), "{image-name}", request.SubjectName,
 		"{subject-name}", request.SubjectName, "{inputs-path}", request.InputsPath,
 		"{capabilities}", strings.Join(request.Capabilities, ","), "{properties}", string(encoded),
 	)
