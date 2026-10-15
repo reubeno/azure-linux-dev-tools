@@ -4,6 +4,7 @@
 package testexecution
 
 import (
+	"encoding/xml"
 	"testing"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testutils"
@@ -16,6 +17,47 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJUnitCannotHideRunFailureBehindPassingNativeCases(t *testing.T) {
+	for _, nativeFailure := range []bool{false, true} {
+		env := testutils.NewTestEnv(t)
+		native := "/work/native.xml"
+
+		body := `<testcase name="native"/>`
+		if nativeFailure {
+			body = `<testcase name="native"><failure message="native assertion"/></testcase>`
+		}
+
+		require.NoError(t, fileutils.WriteFile(env.TestFS, native,
+			[]byte(`<testsuite name="native">`+body+`</testsuite>`), fileperms.PrivateFile))
+		require.NoError(t, writeJUnit(env.TestFS, "/work/combined.xml", []testframework.RunResult{
+			{Name: "run", Status: testframework.Failed, Error: "run failure", JUnitPath: native},
+		}))
+		data, err := fileutils.ReadFile(env.TestFS, "/work/combined.xml")
+		require.NoError(t, err)
+
+		var report struct {
+			Suites []struct {
+				Cases []struct {
+					Failure *struct{} `xml:"failure"`
+				} `xml:"testcase"`
+			} `xml:"testsuite"`
+		}
+		require.NoError(t, xml.Unmarshal(data, &report))
+
+		failures := 0
+
+		for _, suite := range report.Suites {
+			for _, testcase := range suite.Cases {
+				if testcase.Failure != nil {
+					failures++
+				}
+			}
+		}
+
+		assert.Equal(t, 1, failures, "retain run failure without duplicating existing native failures")
+	}
+}
 
 type failedRunner struct{}
 
@@ -93,7 +135,7 @@ func (failedRunner) Requirements(testframework.ExecutionSpec) (testframework.Req
 }
 
 func (failedRunner) Run(opctx.Ctx, testframework.RunRequest) (testframework.RunResult, error) {
-	return testframework.RunResult{}, testframework.ErrTestFailed
+	return testframework.RunResult{Status: testframework.Failed}, testframework.ErrTestFailed
 }
 
 func TestExecutionFailuresAndFailFast(t *testing.T) {

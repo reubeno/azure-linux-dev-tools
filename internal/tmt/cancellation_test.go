@@ -6,6 +6,7 @@ package tmt_test
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -78,6 +79,7 @@ func TestCancellationAllowsUnwindAndScopesFallbackCleanup(t *testing.T) {
 				}
 
 				assert.NotNil(t, cmd.Cancel)
+				require.ErrorIs(t, cmd.Cancel(), os.ErrProcessDone, "an unstarted process needs no signal")
 				assert.Equal(t, time.Minute, cmd.WaitDelay)
 				runID = cmd.Args[slices.Index(cmd.Args, "--id")+1]
 				require.NoError(t, fileutils.MkdirAll(ctx.FS(), filepath.Join(runID, "ssh-sockets")))

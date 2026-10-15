@@ -124,6 +124,28 @@ type RunResult struct {
 	Cases     []CaseResult  `json:"cases,omitempty"     table:"-"`
 }
 
+// Validate checks the result/error contract shared by all adapters.
+func (r RunResult) Validate(runErr error) error {
+	switch r.Status {
+	case Passed, Skipped, Planned:
+		if runErr != nil {
+			return fmt.Errorf("test status %#q cannot accompany an execution error", r.Status)
+		}
+	case Failed:
+		if !errors.Is(runErr, ErrTestFailed) {
+			return errors.New("failed test status requires ErrTestFailed")
+		}
+	case Errored, Cancelled:
+		if runErr == nil {
+			return fmt.Errorf("test status %#q requires an execution error", r.Status)
+		}
+	default:
+		return fmt.Errorf("invalid test status %#q", r.Status)
+	}
+
+	return nil
+}
+
 // CaseResult preserves framework-native outcomes without reducing a run to an exit code.
 type CaseResult struct {
 	Name       string        `json:"name"`
@@ -140,6 +162,7 @@ type Runner interface {
 	// Requirements validates strategy support and describes required artifacts.
 	Requirements(execution ExecutionSpec) (Requirements, error)
 	// Run executes against materialized inputs and retains native reports.
+	// The returned status and error must satisfy [RunResult.Validate].
 	Run(ctx opctx.Ctx, request RunRequest) (RunResult, error)
 }
 

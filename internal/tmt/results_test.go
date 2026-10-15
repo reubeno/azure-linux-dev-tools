@@ -145,6 +145,7 @@ func TestCollectResultsDurationValidation(t *testing.T) {
 		"junk", "3s", "12", "-1:00:00", "1:60:00", "00:00:60", "00:00:NaN", "00:00:Inf",
 		"1:2:3:4", "01:00:03suffix", "00:00:03.", "00:00:03.-1", "00::03", " 00:00:03",
 		"00:00:+3", "00:00:3", "999999999999:00:00",
+		"00:00:01.1234567890", "00:00:01.a", "00:00:01./", "00:00:01.:",
 	} {
 		t.Run(value, func(t *testing.T) {
 			fs := testctx.NewCtx().FS()
@@ -166,6 +167,13 @@ func TestCollectResultsDurationValidation(t *testing.T) {
 	require.Len(t, entries, 2)
 	assert.Equal(t, 27*time.Hour+time.Minute+2125*time.Millisecond, entries[0].Duration)
 	assert.Zero(t, entries[1].Duration)
+
+	writeResultData(t, fs, "/native/plan/execute/results.yaml",
+		"- name: /boundary", "  result: pass", "  duration: '00:59:59.012345679'",
+	)
+	entries, err = tmt.CollectResults(fs, "/native")
+	require.NoError(t, err)
+	assert.Equal(t, 59*time.Minute+59*time.Second+12345679*time.Nanosecond, entries[0].Duration)
 }
 
 func TestCollectResultsOutputContainment(t *testing.T) {
@@ -332,6 +340,30 @@ func TestWriteJUnitBoundedFailureOutput(t *testing.T) {
 	assert.Less(t, len(*report.Suite.Cases[0].Failure), 4200)
 	require.NotNil(t, report.Suite.Cases[1].Error)
 	assert.Contains(t, *report.Suite.Cases[1].Error, "/native/missing.txt")
+}
+
+func TestWriteJUnitExactExcerptBoundary(t *testing.T) {
+	for _, length := range []int{100, 4096, 4097} {
+		fs := testctx.NewCtx().FS()
+		content := strings.Repeat("x", length)
+		require.NoError(t, fileutils.WriteFile(fs, "/output.txt", []byte(content), fileperms.PrivateFile))
+		require.NoError(t, tmt.WriteJUnit(fs, "/report.xml", []tmt.ResultEntry{
+			{Name: "failure", Status: "fail", OutputPath: "/output.txt"},
+		}))
+		data, err := fileutils.ReadFile(fs, "/report.xml")
+		require.NoError(t, err)
+
+		var report parsedJUnit
+		require.NoError(t, xml.Unmarshal(data, &report))
+		require.NotNil(t, report.Suite.Cases[0].Failure)
+
+		expected := "Output: /output.txt\n" + content
+		if length > 4096 {
+			expected = "Output: /output.txt\n" + content[:4096] + "\n[output truncated]"
+		}
+
+		assert.Equal(t, expected, *report.Suite.Cases[0].Failure)
+	}
 }
 
 func TestWriteJUnitEmptyAndInvalidEntries(t *testing.T) {

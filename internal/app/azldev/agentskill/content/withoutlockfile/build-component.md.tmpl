@@ -55,6 +55,8 @@ under the selected work directory; do not depend on temporary venv paths.
 VM inputs may be RAW, qcow2, VHD, or VHDX; conversion never modifies the original.
 Use TMT `context` for fmf adjustments and `cloud-init-runcmds` for guest VM hooks.
 Native extra arguments are scope-checked and cannot override managed inputs.
+TMT VM plans must have at most one provision phase. All-skipped runs are skipped;
+reporting or cleanup failures remain errors even if tests also failed.
 
 Finalize with `azldev comp refresh-upstream-commit -p <name>` before opening a PR (see the
 `azldev-refresh-upstream-commit` skill).

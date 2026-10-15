@@ -34,6 +34,11 @@ func TestSelectorsRejectEveryUnknownAndDedupe(t *testing.T) {
 	cfg := projectconfig.NewProjectConfig()
 	cfg.Tests["one"] = pytestTest("one").Definition
 	cfg.TestGroups["group"] = projectconfig.TestGroup{Tests: []projectconfig.TestRef{{Name: "one"}}}
+	associated := []projectconfig.ResolvedTest{pytestTest("associated")}
+	defaults, err := testexecution.Select(&cfg, associated, nil)
+	require.NoError(t, err)
+	assert.Equal(t, associated, defaults)
+
 	tests, err := testexecution.Select(&cfg, nil, []string{"one", "group"})
 	require.NoError(t, err)
 	require.Len(t, tests, 1)
@@ -125,6 +130,25 @@ func TestComponentPytestInputsAndAggregatedJUnit(t *testing.T) {
 	require.NoError(t, json.Unmarshal(inputs, &decoded))
 	assert.Equal(t, "curl", decoded["subject"])
 	assert.Contains(t, string(inputs), "/project/pkg.rpm")
+
+	successfulHandler := env.CmdFactory.RunHandler
+	env.CmdFactory.RunHandler = func(cmd *exec.Cmd) error {
+		if err := successfulHandler(cmd); err != nil {
+			return err
+		}
+
+		if slices.Contains(cmd.Args, "pytest") {
+			path := cmd.Args[slices.Index(cmd.Args, "--junit-xml")+1]
+
+			return fileutils.WriteFile(env.TestFS, path, []byte("<broken"), fileperms.PrivateFile)
+		}
+
+		return nil
+	}
+	_, err = testexecution.Run(env.Env, testexecution.Subject{Name: "curl", Kind: "component"},
+		tests[:1], testexecution.Options{RPMPaths: []string{"pkg.rpm"}, JUnitXMLPath: "/malformed.xml"},
+		&artifacts.Resolver{Env: env.Env})
+	require.ErrorContains(t, err, "invalid JUnit report", "aggregate report errors must reach the caller")
 }
 
 func TestImageTMTDoesNotAcceptUnrelatedSSHTarget(t *testing.T) {

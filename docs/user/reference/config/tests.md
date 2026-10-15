@@ -120,6 +120,9 @@ content; conversion to a private qcow2 occurs only when needed. A declared
 plan user is preserved; otherwise local VM testing uses `azureuser`, rather
 than assuming Azure Linux images allow root SSH. Set a different VM user in
 the plan; SSH strategy uses the common `--ssh-user` option.
+An explicit plan selects that exact name, not a regular expression or prefix.
+VM plans with multiple provision phases are rejected rather than applying
+one guest's hardware or user settings to every guest.
 
 VM hosts need QEMU/libvirt, UEFI firmware, a cloud-init ISO tool such as
 `genisoimage`, and permission to use virtualization. Installing TMT's virtual

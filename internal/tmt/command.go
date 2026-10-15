@@ -23,7 +23,10 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 )
 
-const candidateRPMPrepareStepName = "azldev-candidate-rpms"
+const (
+	candidateRPMPrepareStepName = "azldev-candidate-rpms"
+	exitAllTestsSkipped         = 4
+)
 
 func (r *Runner) runArgs(
 	plan string, request testframework.RunRequest, outputDir string, hardware []string,
@@ -31,7 +34,7 @@ func (r *Runner) runArgs(
 ) []string {
 	args := []string{"run", "--all", "--keep", "--workdir-root", filepath.Dir(outputDir), "--id", outputDir, "plan"}
 	if plan != "" {
-		args = append(args, "--name", plan)
+		args = append(args, "--name", exactPlanName(plan))
 	}
 
 	args = append(args, r.config.PlanExtraArgs...)
@@ -123,13 +126,9 @@ func commandOutput(ctx opctx.Ctx, dir, program string, args ...string) (string, 
 
 func runTMTCommand(
 	ctx opctx.Ctx, dir, pluginDir, program string, strategy testframework.Strategy, args ...string,
-) error {
+) (testframework.Status, error) {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("TMT command cancelled:\n%w", err)
-	}
-
-	if ctx.DryRun() {
-		return nil
+		return testframework.Cancelled, fmt.Errorf("TMT command cancelled:\n%w", err)
 	}
 
 	command := exec.CommandContext(ctx, program, args...)
@@ -156,16 +155,16 @@ func runTMTCommand(
 	}
 
 	if logPath == "" {
-		return errors.New("TMT execution requires an explicit native run directory")
+		return testframework.Errored, errors.New("TMT execution requires an explicit native run directory")
 	}
 
 	if err := fileutils.MkdirAll(ctx.FS(), filepath.Dir(logPath)); err != nil {
-		return fmt.Errorf("create TMT output directory:\n%w", err)
+		return testframework.Errored, fmt.Errorf("create TMT output directory:\n%w", err)
 	}
 
 	logFile, err := ctx.FS().OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileperms.PrivateFile)
 	if err != nil {
-		return fmt.Errorf("open TMT output log:\n%w", err)
+		return testframework.Errored, fmt.Errorf("open TMT output log:\n%w", err)
 	}
 	defer logFile.Close()
 
@@ -178,23 +177,35 @@ func runTMTCommand(
 
 	wrapped, err := ctx.Command(command)
 	if err != nil {
-		return fmt.Errorf("create TMT command:\n%w", err)
+		return testframework.Errored, fmt.Errorf("create TMT command:\n%w", err)
 	}
 
-	if err := wrapped.Run(ctx); err != nil {
+	runErr := wrapped.Run(ctx)
+
+	return commandResult(ctx, runErr, stderr.String())
+}
+
+func commandResult(ctx opctx.Ctx, err error, stderr string) (testframework.Status, error) {
+	if err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("TMT command cancelled:\n%w", ctx.Err())
+			return testframework.Cancelled, fmt.Errorf("TMT command cancelled:\n%w", ctx.Err())
 		}
 
 		var exitError interface{ ExitCode() int }
-		if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
-			return fmt.Errorf("%w (%s):\n%w", testframework.ErrTestFailed, strings.TrimSpace(stderr.String()), err)
+		if errors.As(err, &exitError) {
+			switch exitError.ExitCode() {
+			case 1:
+				return testframework.Failed,
+					fmt.Errorf("%w (%s):\n%w", testframework.ErrTestFailed, strings.TrimSpace(stderr), err)
+			case exitAllTestsSkipped:
+				return testframework.Skipped, nil
+			}
 		}
 
-		return fmt.Errorf("run TMT (%s):\n%w", strings.TrimSpace(stderr.String()), err)
+		return testframework.Errored, fmt.Errorf("run TMT (%s):\n%w", strings.TrimSpace(stderr), err)
 	}
 
-	return nil
+	return testframework.Passed, nil
 }
 
 type lockedWriter struct {

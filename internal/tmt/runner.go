@@ -32,54 +32,28 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (testframe
 	started := time.Now()
 	result := testframework.RunResult{
 		Name: r.name, Framework: "tmt", Strategy: request.Execution.Strategy,
-		OutputDir: filepath.Join(request.WorkDir, "tmt"),
+		OutputDir: filepath.Join(request.WorkDir, "tmt"), Status: testframework.Errored,
 	}
 
-	err := r.run(ctx, request, result.OutputDir)
-	if !ctx.DryRun() {
-		entries, resultErr := CollectResults(ctx.FS(), result.OutputDir)
-		err = errors.Join(err, resultErr)
-
-		for _, entry := range entries {
-			result.Cases = append(result.Cases, testframework.CaseResult{
-				Name: entry.Name, Status: entry.Status, Duration: entry.Duration, OutputPath: entry.OutputPath,
-			})
-		}
-
-		if request.JUnitPath != "" && len(entries) > 0 {
-			reportErr := WriteJUnit(ctx.FS(), request.JUnitPath, entries)
-
-			err = errors.Join(err, reportErr)
-			if reportErr == nil {
-				result.JUnitPath = request.JUnitPath
-			}
-		}
-	}
-
+	err := r.run(ctx, request, &result)
 	result.Duration = time.Since(started)
 
-	switch {
-	case err == nil && ctx.DryRun():
-		result.Status = testframework.Planned
-	case err == nil:
-		result.Status = testframework.Passed
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), ctx.Err() != nil:
+	if ctx.Err() != nil {
+		err = errors.Join(err, fmt.Errorf("TMT execution cancelled:\n%w", ctx.Err()))
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 		result.Status = testframework.Cancelled
-	case errors.Is(err, testframework.ErrTestFailed):
-		result.Status = testframework.Failed
-	default:
-		result.Status = testframework.Errored
 	}
 
 	if err != nil {
 		result.Error = err.Error()
 	}
 
-	// Collect native results without overriding the plan's report plugins.
 	return result, err
 }
 
-func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir string) (err error) {
+func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, result *testframework.RunResult) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("TMT execution cancelled:\n%w", err)
 	}
@@ -89,6 +63,8 @@ func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir 
 	}
 
 	if ctx.DryRun() {
+		result.Status = testframework.Planned
+
 		return nil
 	}
 
@@ -104,6 +80,7 @@ func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir 
 	defer func() {
 		if cleanupErr := ctx.FS().RemoveAll(privateDir); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove private TMT runtime:\n%w", cleanupErr))
+			result.Status = testframework.Errored
 		}
 	}()
 
@@ -127,8 +104,18 @@ func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir 
 		return err
 	}
 
-	if err := r.executeAndCollect(ctx, request, runDir, program, pluginDir, outputDir); err != nil {
-		return fmt.Errorf("run TMT (artifacts: %#q):\n%w", outputDir, err)
+	if err := ctx.FS().Mkdir(result.OutputDir, fileperms.PrivateDir); err != nil {
+		return fmt.Errorf("create fresh TMT result directory %#q; use a new work directory:\n%w", result.OutputDir, err)
+	}
+
+	result.Status, err = r.executeAndCollect(ctx, request, runDir, program, pluginDir, result.OutputDir)
+	if resultErr := collectRunResults(ctx.FS(), request.JUnitPath, result); resultErr != nil {
+		err = errors.Join(err, resultErr)
+		result.Status = testframework.Errored
+	}
+
+	if err != nil {
+		return fmt.Errorf("run TMT (artifacts: %#q):\n%w", result.OutputDir, err)
 	}
 
 	return nil
@@ -176,6 +163,10 @@ func (r *Runner) validateRequest(request testframework.RunRequest) error {
 	requirements, err := r.Requirements(request.Execution)
 	if err != nil {
 		return err
+	}
+
+	if request.JUnitPath != "" && !filepath.IsAbs(request.JUnitPath) {
+		return errors.New("TMT JUnit path must be absolute")
 	}
 
 	for _, directory := range []struct{ name, path string }{
@@ -265,6 +256,17 @@ func validatePrerequisites(ctx opctx.Ctx, request testframework.RunRequest) erro
 		if err := prereqs.RequireExecutable(ctx, "podman", nil); err != nil {
 			return fmt.Errorf("podman is required for TMT strategy 'container':\n%w", err)
 		}
+	}
+
+	outputDir := filepath.Join(request.WorkDir, "tmt")
+
+	exists, err := fileutils.Exists(ctx.FS(), outputDir)
+	if err != nil {
+		return fmt.Errorf("check fresh TMT result directory:\n%w", err)
+	}
+
+	if exists {
+		return fmt.Errorf("fresh TMT result directory required: %#q already exists; use a new work directory", outputDir)
 	}
 
 	return validateFiles(ctx, request)

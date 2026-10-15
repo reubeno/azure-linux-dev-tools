@@ -46,6 +46,9 @@ Inspect retained native logs and per-case JUnit when a test fails; for TMT,
 `python-environment.txt` records runtime versions and `tmt-output.log` captures
 combined output. A QEMU image must have working cloud-init; Hyper-V-specific
 reporting can make an otherwise reachable guest fail LISA provisioning.
+TMT VM plans currently support one provision phase; multi-guest plans are
+rejected rather than silently changing guest requirements. All-skipped runs
+are reported as skipped, while reporting and cleanup failures remain errors.
 
 Published images live under
 `[distros.<distro>.versions.<version>.images.<name>.architectures]`, independently

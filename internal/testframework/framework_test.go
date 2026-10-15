@@ -6,7 +6,9 @@ package testframework_test
 import (
 	"testing"
 
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +22,14 @@ func TestExecutionValidation(t *testing.T) {
 		{testframework.ExecutionSpec{Strategy: testframework.Host}, true},
 		{testframework.ExecutionSpec{Strategy: testframework.SSH, SSHHost: "guest", SSHUser: "tester"}, true},
 		{testframework.ExecutionSpec{Strategy: testframework.SSH}, false},
+		{testframework.ExecutionSpec{Strategy: testframework.SSH, SSHHost: "guest"}, false},
+		{testframework.ExecutionSpec{Strategy: testframework.SSH, SSHUser: "tester"}, false},
+		{testframework.ExecutionSpec{
+			Strategy: testframework.SSH, SSHHost: "guest", SSHUser: "tester", SSHPort: 65535,
+		}, true},
+		{testframework.ExecutionSpec{
+			Strategy: testframework.SSH, SSHHost: "guest", SSHUser: "tester", SSHPort: -1,
+		}, false},
 		{testframework.ExecutionSpec{
 			Strategy: testframework.SSH, SSHHost: "guest", SSHUser: "tester", SSHPort: 65536,
 		}, false},
@@ -41,4 +51,19 @@ func TestManagedNames(t *testing.T) {
 	}
 
 	require.NoError(t, testframework.ValidateName("kernel-smoke"))
+}
+
+func TestNativePathsPreserveInputIdentity(t *testing.T) {
+	request := testframework.RunRequest{}
+	assert.Empty(t, request.ImagePath())
+	assert.Empty(t, request.RPMPaths())
+	request.Image = &artifact.Artifact{Path: "/image", SHA256: "identity"}
+	request.Packages = []artifact.Artifact{{Path: "/one.rpm"}, {Path: "/two.rpm"}}
+	assert.Equal(t, "/image", request.ImagePath())
+	paths := request.RPMPaths()
+	assert.Equal(t, []string{"/one.rpm", "/two.rpm"}, paths)
+	paths[0] = "/other"
+
+	assert.Equal(t, "/one.rpm", request.Packages[0].Path)
+	assert.Equal(t, "identity", request.Image.SHA256)
 }

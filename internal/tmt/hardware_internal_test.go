@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -91,6 +92,12 @@ func TestExportedPlanHardware(t *testing.T) {
 		{"invalid json", `{`, nil, "decode TMT plan export"},
 		{"missing plan", `[{"name":"/other"}]`, nil, "was not returned"},
 		{"duplicate plan", `[{"name":"/smoke"},{"name":"/smoke"}]`, nil, "multiple exported plans"},
+		{
+			"multiple guests", `[{"name":"/smoke","provision":[{"user":"first"},{"user":"second"}]}]`,
+			nil, "multiple provision phases",
+		},
+		{"invalid hardware", `[{"name":"/smoke","provision":[{"hardware":"invalid"}]}]`, nil, "must be a mapping"},
+		{"null hardware", `[{"name":"/smoke","provision":[{"hardware":null}]}]`, map[string]any{}, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			actual, err := exportedPlanHardware([]byte(test.output), "/smoke")
@@ -133,7 +140,7 @@ func TestResolvedPlanVirtualUser(t *testing.T) {
 			ctx := testctx.NewCtx()
 			ctx.CmdFactory.RunAndGetOutputHandler = func(cmd *exec.Cmd) (string, error) {
 				assert.Equal(t, []string{
-					"/venv/tmt", "-c", "distro=azurelinux-4", "plan", "export", "/smoke", "--how", "json",
+					"/venv/tmt", "-c", "distro=azurelinux-4", "plan", "export", "^/smoke$", "--how", "json",
 				}, cmd.Args)
 
 				return test.output, nil
@@ -149,6 +156,17 @@ func TestResolvedPlanVirtualUser(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, test.user, user)
 		})
+	}
+}
+
+func TestPlanSelectorIsExactAndLiteral(t *testing.T) {
+	name := "/plans/smoke.v1+[host]"
+	pattern, err := regexp.Compile(exactPlanName(name))
+	require.NoError(t, err)
+	assert.True(t, pattern.MatchString(name))
+
+	for _, other := range []string{name + "/extra", "/prefix" + name, "/plans/smokeXv11h"} {
+		assert.False(t, pattern.MatchString(other), other)
 	}
 }
 

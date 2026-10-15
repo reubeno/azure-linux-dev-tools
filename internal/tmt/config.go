@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -98,6 +99,10 @@ func validatePlan(plan string) error {
 	}
 
 	return nil
+}
+
+func exactPlanName(plan string) string {
+	return "^" + regexp.QuoteMeta(plan) + "$"
 }
 
 func (r *Runner) plan(execution testframework.ExecutionSpec) string {

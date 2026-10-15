@@ -18,10 +18,44 @@ import (
 	"time"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
+	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"gopkg.in/yaml.v3"
 )
+
+func collectRunResults(fs opctx.FS, junitPath string, result *testframework.RunResult) error {
+	entries, err := CollectResults(fs, result.OutputDir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		result.Cases = append(result.Cases, testframework.CaseResult{
+			Name: entry.Name, Status: entry.Status, Duration: entry.Duration, OutputPath: entry.OutputPath,
+		})
+	}
+
+	if junitPath == "" {
+		return nil
+	}
+
+	if len(entries) == 0 {
+		if result.Status == testframework.Passed || result.Status == testframework.Skipped {
+			return errors.New("TMT completed without native test results for the requested JUnit report")
+		}
+
+		return nil
+	}
+
+	if err := WriteJUnit(fs, junitPath, entries); err != nil {
+		return err
+	}
+
+	result.JUnitPath = junitPath
+
+	return nil
+}
 
 const (
 	yamlStringTag          = "!!str"

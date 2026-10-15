@@ -54,12 +54,15 @@ func writeJUnit(files opctx.FS, path string, results []testframework.RunResult) 
 			return fmt.Errorf("write j unit:\n%w", err)
 		}
 
-		if len(native) > 0 {
-			report.Suites = append(report.Suites, native...)
-			// Setup/teardown errors may not appear in a framework's native report.
-			if result.Status != testframework.Errored && result.Status != testframework.Cancelled {
-				continue
-			}
+		report.Suites = append(report.Suites, native...)
+
+		needsOutcome, err := needsRunOutcome(result.Status, native)
+		if err != nil {
+			return err
+		}
+
+		if !needsOutcome {
+			continue
 		}
 
 		test := junitCase{Name: result.Name, Time: strconv.FormatFloat(result.Duration.Seconds(), 'f', 3, 64)}
@@ -98,6 +101,42 @@ func writeJUnit(files opctx.FS, path string, results []testframework.RunResult) 
 	}
 
 	return nil
+}
+
+func needsRunOutcome(status testframework.Status, native []junitSuite) (bool, error) {
+	if len(native) == 0 || status == testframework.Errored || status == testframework.Cancelled {
+		return true, nil
+	}
+
+	if status == testframework.Failed {
+		hasFailure, err := hasNativeFailure(native)
+
+		return !hasFailure, err
+	}
+
+	return false, nil
+}
+
+func hasNativeFailure(suites []junitSuite) (bool, error) {
+	for _, suite := range suites {
+		var parsed struct {
+			Cases []struct {
+				Failure *struct{} `xml:"failure"`
+				Error   *struct{} `xml:"error"`
+			} `xml:"testcase"`
+		}
+		if err := xml.Unmarshal([]byte("<testsuite>"+suite.Body+"</testsuite>"), &parsed); err != nil {
+			return false, fmt.Errorf("inspect native JUnit outcomes:\n%w", err)
+		}
+
+		for _, testcase := range parsed.Cases {
+			if testcase.Failure != nil || testcase.Error != nil {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
 }
 
 func readJUnit(files opctx.FS, path string) ([]junitSuite, error) {

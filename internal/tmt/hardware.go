@@ -32,7 +32,7 @@ func resolvedPlanSettings(ctx opctx.Ctx, sourceDir, program, plan string,
 		return []string{"boot.method = uefi"}, "azureuser", nil
 	}
 
-	args := append(slices.Clone(globalArgs), "plan", "export", plan, "--how", "json")
+	args := append(slices.Clone(globalArgs), "plan", "export", exactPlanName(plan), "--how", "json")
 
 	output, err := commandOutput(ctx, sourceDir, program, args...)
 	if err != nil {
@@ -74,7 +74,12 @@ func exportedPlanHardware(output []byte, plan string) (map[string]any, error) {
 	}
 
 	if len(selected.Provision) > 0 {
-		if hardware, ok := selected.Provision[0]["hardware"].(map[string]any); ok {
+		if value, exists := selected.Provision[0]["hardware"]; exists && value != nil {
+			hardware, ok := value.(map[string]any)
+			if !ok {
+				return nil, errors.New("TMT virtual provision hardware must be a mapping")
+			}
+
 			return hardware, nil
 		}
 	}
@@ -104,6 +109,10 @@ func selectExportedPlan(output []byte, plan string) (*planExport, error) {
 
 	if selected == nil {
 		return nil, fmt.Errorf("plan %#q was not returned by TMT plan export", plan)
+	}
+
+	if len(selected.Provision) > 1 {
+		return nil, fmt.Errorf("TMT VM plan %#q has multiple provision phases; per-guest overrides are not supported", plan)
 	}
 
 	return selected, nil

@@ -35,6 +35,7 @@ const (
 	planName   = "/plans/smoke"
 	imageID    = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	tmtProgram = "tmt"
+	ociFormat  = "oci"
 )
 
 func TestNew(t *testing.T) {
@@ -188,6 +189,9 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 				commands = append(commands, command)
 				if filepath.Base(command.Args[0]) == tmtProgram {
 					writeFile(t, ctx, command.Dir+"/.fmf/version", "private mutation\n")
+					native := command.Args[slices.Index(command.Args, "--id")+1]
+					writeResultData(t, ctx.FS(), filepath.Join(native, "plans/smoke/execute/results.yaml"),
+						"- name: /case", "  result: pass")
 				}
 
 				return nil
@@ -209,7 +213,7 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 				}
 
 				assert.Equal(t, filepath.Join(filepath.Dir(commands[0].Args[3]), "source"), command.Dir)
-				assert.Equal(t, []string{"plan", "export", planName, "--how", "json"}, command.Args[1:])
+				assert.Equal(t, []string{"plan", "export", "^" + planName + "$", "--how", "json"}, command.Args[1:])
 
 				return `[{"name":"/plans/smoke","provision":[{"hardware":{` +
 					`"memory":">= 4 GB","boot":{"method":"bios"},"cpu":{"cores":4}}}]}]`, nil
@@ -222,7 +226,7 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 			assert.Equal(t, tmtProgram, result.Framework)
 			assert.Equal(t, strategy, result.Strategy)
 			assert.Equal(t, "/work/run/tmt", result.OutputDir)
-			assert.Empty(t, result.JUnitPath, "TMT's default reporter does not produce JUnit")
+			assert.Equal(t, request.JUnitPath, result.JUnitPath, "native cases generate the requested JUnit report")
 			require.Len(t, commands, 3, "only venv, pip, and TMT run should execute")
 			assert.Equal(t, []string{"-m", "venv"}, commands[0].Args[1:3])
 			assert.Equal(t, filepath.Join(commands[0].Args[3], "bin/python3"), commands[1].Args[0])
@@ -241,7 +245,7 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 			assert.True(t, strings.HasPrefix(nativeDir, "/var/tmp/azlt-"))
 			expected := []string{
 				"run", "--all", "--keep", "--workdir-root", filepath.Dir(nativeDir), "--id", nativeDir,
-				"plan", "--name", planName, "provision", "--how",
+				"plan", "--name", "^" + planName + "$", "provision", "--how",
 			}
 
 			switch strategy {
@@ -472,7 +476,16 @@ func TestRunPreflightFailsBeforeProcesses(t *testing.T) {
 		{"source inside work", func(r *testframework.RunRequest) { r.WorkDir = "/" }, "must not overlap"},
 		{"relative work", func(r *testframework.RunRequest) { r.WorkDir = "work" }, "work directory must be absolute"},
 		{"relative cache", func(r *testframework.RunRequest) { r.CacheDir = "cache" }, "cache directory must be absolute"},
+		{"relative JUnit", func(r *testframework.RunRequest) { r.JUnitPath = "report.xml" }, "JUnit path must be absolute"},
 		{"missing image", func(r *testframework.RunRequest) { r.Image = nil }, "image path"},
+		{"unresolved container tag", func(r *testframework.RunRequest) {
+			r.Execution.Strategy = testframework.Container
+			r.Image.Format, r.Image.Path = ociFormat, "registry.example/image:latest"
+		}, "image path"},
+		{"unnormalized container identity", func(r *testframework.RunRequest) {
+			r.Execution.Strategy = testframework.Container
+			r.Image.Format, r.Image.Path = ociFormat, strings.TrimPrefix(imageID, "sha256:")
+		}, "image path"},
 		{"relative RPM", func(r *testframework.RunRequest) {
 			r.Packages = []artifact.Artifact{{Path: "package.rpm", Format: "rpm"}}
 		}, "RPM path"},
@@ -731,7 +744,9 @@ func TestRuntimeFailureAndCancellationCleanup(t *testing.T) {
 
 			ctx.Ctx = t.Context()
 			ctx.CmdFactory.RunHandler = nil
-			result, err = runner.Run(ctx, requestFor(testframework.Host))
+			retry := requestFor(testframework.Host)
+			retry.WorkDir = "/work/retry"
+			result, err = runner.Run(ctx, retry)
 			require.NoError(t, err)
 			assert.Equal(t, testframework.Passed, result.Status)
 		})
@@ -814,7 +829,7 @@ func requestFor(strategy testframework.Strategy) testframework.RunRequest {
 	if strategy == testframework.VM || strategy == testframework.Container {
 		request.Image = &artifact.Artifact{Path: "/images/image", Format: "qcow2"}
 		if strategy == testframework.Container {
-			request.Image.Format = "oci"
+			request.Image.Format = ociFormat
 		}
 	}
 

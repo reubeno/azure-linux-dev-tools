@@ -391,23 +391,17 @@ func executeOne(env *azldev.Env, subject Subject, plan plannedTest, inputs testI
 	native, err := plan.runner.Run(env, request)
 	result.Duration = time.Since(start)
 
-	result.Status, result.JUnitPath = native.Status, native.JUnitPath
+	result.Status, result.JUnitPath, result.Error = native.Status, native.JUnitPath, native.Error
 
 	result.Cases = native.Cases
-	if err != nil {
-		result.Status, result.Error = testframework.Errored, err.Error()
-		if errors.Is(err, testframework.ErrTestFailed) {
-			result.Status = testframework.Failed
-		}
-
-		if env.Err() != nil {
-			result.Status = testframework.Cancelled
-		}
-	} else if result.Status == "" {
-		result.Status = testframework.Passed
+	if contractErr := native.Validate(err); contractErr != nil {
+		err = errors.Join(err, fmt.Errorf("invalid framework result:\n%w", contractErr))
+		result.Status = testframework.Errored
 	}
 
 	if err != nil {
+		result.Error = err.Error()
+
 		return result, fmt.Errorf("execute test:\n%w", err)
 	}
 

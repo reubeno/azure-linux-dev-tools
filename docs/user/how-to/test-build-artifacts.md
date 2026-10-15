@@ -117,6 +117,10 @@ per-test directories, and `results.json` records normalized outcomes. An
 optional aggregate JUnit report includes native cases when available and
 explicit setup/teardown failures. Assertions, execution errors, skips, and
 cancellation remain distinguishable.
+TMT's all-skipped exit status is recorded as `skipped`, not an infrastructure
+error. Reporting or cleanup errors remain infrastructure errors even when
+the native tests also failed; an aggregate report never hides a failed run
+behind otherwise passing native cases.
 
 TMT results include native per-case outcomes and log paths; aggregated JUnit is
 derived from `execute/results.yaml`, not a synthetic single-case success.
@@ -124,6 +128,9 @@ The plan's native reporting plugins remain intact. `tmt-output.log` retains
 combined output, and `python-environment.txt` records the installed TMT runtime.
 Cancellation gives TMT time to unwind; a bounded, run-specific cleanup handles
 managed guests before the private environment is removed.
+The adapter requires a fresh native result directory for each run, so an early
+failure cannot accidentally report cases from an older run. Both CLI commands
+allocate this directory automatically.
 
 Writable framework checkouts and installed environments are private to a run.
 Caller sources are copied, including uncommitted changes, rather than modified

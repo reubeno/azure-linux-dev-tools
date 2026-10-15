@@ -181,6 +181,12 @@ func TestExtraArgsAcceptScopedValues(t *testing.T) {
 	}
 }
 
+func TestVerbosityDoesNotInterpretOptionValues(t *testing.T) {
+	runner, err := New("test", map[string]any{"run-extra-args": []string{"--log-topic", "command-events"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"-vv", "--log-topic", "command-events"}, runner.config.globalArgs(true))
+}
+
 func TestConfiguredProvisionerRequiresMatchingStrategy(t *testing.T) {
 	for _, test := range []struct {
 		how      string

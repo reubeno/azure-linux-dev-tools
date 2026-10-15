@@ -35,10 +35,10 @@ func nativeWorkspace(ctx opctx.Ctx) (string, error) {
 
 func (r *Runner) executeAndCollect(ctx opctx.Ctx, request testframework.RunRequest,
 	sourceDir, program, pluginDir, outputDir string,
-) (err error) {
+) (status testframework.Status, err error) {
 	root, err := nativeWorkspace(ctx)
 	if err != nil {
-		return err
+		return testframework.Errored, err
 	}
 
 	nativeRun := filepath.Join(root, "run")
@@ -46,24 +46,28 @@ func (r *Runner) executeAndCollect(ctx opctx.Ctx, request testframework.RunReque
 	defer func() {
 		if cleanupErr := ctx.FS().RemoveAll(root); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove native TMT workspace:\n%w", cleanupErr))
+			status = testframework.Errored
 		}
 	}()
 
 	args, err := r.prepareArguments(ctx, request, sourceDir, program, nativeRun)
 	if err != nil {
-		return err
+		return testframework.Errored, err
 	}
 
-	runErr := runTMTCommand(ctx, sourceDir, pluginDir, program, request.Execution.Strategy, args...)
+	status, runErr := runTMTCommand(ctx, sourceDir, pluginDir, program, request.Execution.Strategy, args...)
 	// Cleanup must precede removal of the private Python environment.
 	managedGuest := request.Execution.Strategy == testframework.VM || request.Execution.Strategy == testframework.Container
 	if runErr != nil && managedGuest {
-		runErr = errors.Join(runErr, cleanGuests(ctx, program, nativeRun, pluginDir, request.Execution.Strategy))
+		if cleanupErr := cleanGuests(ctx, program, nativeRun, pluginDir, request.Execution.Strategy); cleanupErr != nil {
+			runErr = errors.Join(runErr, cleanupErr)
+			status = testframework.Errored
+		}
 	}
 
 	exists, statErr := fileutils.DirExists(ctx.FS(), nativeRun)
 	if statErr != nil {
-		return errors.Join(runErr, fmt.Errorf("inspect TMT run state:\n%w", statErr))
+		return testframework.Errored, errors.Join(runErr, fmt.Errorf("inspect TMT run state:\n%w", statErr))
 	}
 
 	if exists {
@@ -80,11 +84,11 @@ func (r *Runner) executeAndCollect(ctx opctx.Ctx, request testframework.RunReque
 					return !strings.HasPrefix(relative, "ssh-sockets"+string(filepath.Separator)), nil
 				},
 			}); copyErr != nil {
-			return errors.Join(runErr, fmt.Errorf("collect TMT run state:\n%w", copyErr))
+			return testframework.Errored, errors.Join(runErr, fmt.Errorf("collect TMT run state:\n%w", copyErr))
 		}
 	}
 
-	return runErr
+	return status, runErr
 }
 
 func cleanGuests(ctx opctx.Ctx, program, nativeRun, pluginDir string, strategy testframework.Strategy) error {
