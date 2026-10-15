@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -18,25 +19,70 @@ type planExport struct {
 	Provision []map[string]any `json:"provision"`
 }
 
-func resolvedPlanHardwareArgs(ctx opctx.Ctx, sourceDir, program, plan string) ([]string, error) {
+func resolvedPlanHardwareArgs(ctx opctx.Ctx, sourceDir, program, plan string, globalArgs ...string) ([]string, error) {
+	hardware, _, err := resolvedPlanSettings(ctx, sourceDir, program, plan, globalArgs...)
+
+	return hardware, err
+}
+
+func resolvedPlanSettings(ctx opctx.Ctx, sourceDir, program, plan string,
+	globalArgs ...string,
+) (hardwareArgs []string, user string, err error) {
 	if ctx.DryRun() {
-		return []string{"boot.method = uefi"}, nil
+		return []string{"boot.method = uefi"}, "azureuser", nil
 	}
 
-	output, err := commandOutput(ctx, sourceDir, program, "plan", "export", plan, "--how", "json")
+	args := append(slices.Clone(globalArgs), "plan", "export", plan, "--how", "json")
+
+	output, err := commandOutput(ctx, sourceDir, program, args...)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	hardware, err := exportedPlanHardware([]byte(output), plan)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	return mergePlanHardwareArgs(hardware)
+	selected, err := selectExportedPlan([]byte(output), plan)
+	if err != nil {
+		return nil, "", err
+	}
+
+	user = "azureuser"
+
+	if len(selected.Provision) > 0 {
+		if configured, exists := selected.Provision[0]["user"]; exists {
+			value, ok := configured.(string)
+			if !ok || strings.TrimSpace(value) == "" {
+				return nil, "", errors.New("TMT virtual provision user must be a non-empty string")
+			}
+
+			user = value
+		}
+	}
+
+	hardwareArgs, err = mergePlanHardwareArgs(hardware)
+
+	return hardwareArgs, user, err
 }
 
 func exportedPlanHardware(output []byte, plan string) (map[string]any, error) {
+	selected, err := selectExportedPlan(output, plan)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(selected.Provision) > 0 {
+		if hardware, ok := selected.Provision[0]["hardware"].(map[string]any); ok {
+			return hardware, nil
+		}
+	}
+
+	return map[string]any{}, nil
+}
+
+func selectExportedPlan(output []byte, plan string) (*planExport, error) {
 	var plans []planExport
 	if err := json.Unmarshal(output, &plans); err != nil {
 		return nil, fmt.Errorf("decode TMT plan export:\n%w", err)
@@ -60,13 +106,7 @@ func exportedPlanHardware(output []byte, plan string) (map[string]any, error) {
 		return nil, fmt.Errorf("plan %#q was not returned by TMT plan export", plan)
 	}
 
-	if len(selected.Provision) > 0 {
-		if hardware, ok := selected.Provision[0]["hardware"].(map[string]any); ok {
-			return hardware, nil
-		}
-	}
-
-	return map[string]any{}, nil
+	return selected, nil
 }
 
 // CLI hardware replaces rather than extends the plan's hardware. Re-emit all

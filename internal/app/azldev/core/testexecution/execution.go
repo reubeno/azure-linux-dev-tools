@@ -392,6 +392,8 @@ func executeOne(env *azldev.Env, subject Subject, plan plannedTest, inputs testI
 	result.Duration = time.Since(start)
 
 	result.Status, result.JUnitPath = native.Status, native.JUnitPath
+
+	result.Cases = native.Cases
 	if err != nil {
 		result.Status, result.Error = testframework.Errored, err.Error()
 		if errors.Is(err, testframework.ErrTestFailed) {
@@ -428,10 +430,12 @@ func prepareRequest(env *azldev.Env, subject Subject, plan plannedTest, inputs t
 	}
 
 	data, err := json.MarshalIndent(struct {
-		Subject string     `json:"subject"`
-		Kind    string     `json:"kind"`
-		Inputs  testInputs `json:"inputs"`
-	}{subject.Name, subject.Kind, inputs}, "", "  ")
+		Subject   string                      `json:"subject"`
+		Kind      string                      `json:"kind"`
+		Inputs    testInputs                  `json:"inputs"`
+		Test      projectconfig.ResolvedTest  `json:"test"`
+		Execution testframework.ExecutionSpec `json:"execution"`
+	}{subject.Name, subject.Kind, inputs, plan.test, plan.execution}, "", "  ")
 	if err != nil {
 		return request, fmt.Errorf("prepare request:\n%w", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/testctx"
@@ -44,6 +45,10 @@ func setup(t *testing.T) *testctx.TestCtx {
 	ctx := testctx.NewCtx()
 	ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 	ctx.CmdFactory.RegisterCommandInSearchPath("ssh-keygen")
+	ctx.CmdFactory.RegisterCommandInSearchPath("qemu-img")
+	ctx.CmdFactory.RunAndGetOutputHandler = func(*exec.Cmd) (string, error) {
+		return `{"format":"qcow2"}`, nil
+	}
 	write(t, ctx, "/checkout/pyproject.toml", "source remains unchanged")
 	write(t, ctx, "/checkout/lisa/microsoft/runbook/tiers/tier.yml", "extension: [../../testsuites]")
 
@@ -117,7 +122,9 @@ func TestInvocationRunbookAndCandidates(t *testing.T) {
 			return nil
 		}
 
-		assert.Equal(t, req.WorkDir, command.Dir)
+		assert.Equal(t, filepath.Join(privateDir, "framework", "lisa"), command.Dir)
+		assert.NotNil(t, command.Cancel)
+		assert.Equal(t, time.Minute, command.WaitDelay)
 		assert.Equal(t, []string{
 			"--variable", "image:/images/base.qcow2", "name:curl", "subject:curl",
 			"inputs:/work/inputs.json", "caps:bootable,ssh", `properties:{"arch":"aarch64"}`,
@@ -230,7 +237,7 @@ func TestRequirementsAndInvalidRequests(t *testing.T) {
 	assert.True(t, requirements.LiveImage)
 	assert.True(t, requirements.ImageRequired)
 	assert.True(t, requirements.PackagesSupported)
-	assert.Equal(t, []string{"qcow2"}, requirements.ImageFormats)
+	assert.Equal(t, []string{"qcow2", "raw", "vhd", "vhdx"}, requirements.ImageFormats)
 
 	for _, strategy := range []testframework.Strategy{testframework.Host, testframework.Container, testframework.SSH} {
 		_, err := runner.Requirements(testframework.ExecutionSpec{Strategy: strategy})
@@ -241,7 +248,9 @@ func TestRequirementsAndInvalidRequests(t *testing.T) {
 	require.ErrorContains(t, err, "source")
 
 	for name, modify := range map[string]func(*testframework.RunRequest){
-		"raw":      func(req *testframework.RunRequest) { req.Image = &artifact.Artifact{Path: "/base.raw", Format: "raw"} },
+		"unsupported": func(req *testframework.RunRequest) {
+			req.Image = &artifact.Artifact{Path: "/base.oci.tar", Format: "oci"}
+		},
 		"relative": func(req *testframework.RunRequest) { req.WorkDir = "relative" },
 		"rpm": func(req *testframework.RunRequest) {
 			req.Packages = []artifact.Artifact{{Path: "candidate.rpm", Format: "rpm"}}

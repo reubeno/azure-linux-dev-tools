@@ -16,8 +16,8 @@ import (
 // ResolvedTest is a concrete test definition resolved from a direct [tests.X]
 // reference or from expansion of a [test-groups.X] reference.
 type ResolvedTest struct {
-	Name       string
-	Definition TestDefinition
+	Name       string         `json:"name"`
+	Definition TestDefinition `json:"definition"`
 }
 
 // SKUArch enumerates the CPU architectures a [SKUGroup] can target. External

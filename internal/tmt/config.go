@@ -13,11 +13,23 @@ import (
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/qemu"
 )
 
 type config struct {
-	Source *projectconfig.GitSourceConfig
-	Plan   string
+	Source           *projectconfig.GitSourceConfig
+	Plan             string
+	Context          map[string][]string
+	PipExtras        []string
+	RunExtraArgs     []string
+	PlanExtraArgs    []string
+	Provision        provisionConfig
+	CloudInitRuncmds []string
+}
+
+type provisionConfig struct {
+	How       string
+	ExtraArgs []string
 }
 
 // Runner adapts TMT's native provisioners to the shared test execution contract.
@@ -73,6 +85,10 @@ func decodeConfig(raw map[string]any) (config, error) {
 		decoded.Plan = plan
 	}
 
+	if err := decoded.decodeOptions(raw); err != nil {
+		return decoded, err
+	}
+
 	return decoded, nil
 }
 
@@ -112,7 +128,7 @@ func (r *Runner) Requirements(execution testframework.ExecutionSpec) (testframew
 		}
 
 		requirements.ImageRequired = true
-		requirements.ImageFormats = []string{"qcow2"}
+		requirements.ImageFormats = qemu.DiskFormats()
 		requirements.LiveImage = true
 	case testframework.Container:
 		requirements.ImageRequired = true
@@ -139,6 +155,10 @@ func (r *Runner) validateExecution(execution testframework.ExecutionSpec) error 
 	}
 
 	if err := validatePlan(r.plan(execution)); err != nil {
+		return err
+	}
+
+	if err := r.config.validateStrategy(execution.Strategy); err != nil {
 		return err
 	}
 

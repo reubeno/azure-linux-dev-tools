@@ -87,7 +87,7 @@ func TestRequirements(t *testing.T) {
 		formats  []string
 		live     bool
 	}{
-		{testframework.VM, []string{"qcow2"}, true},
+		{testframework.VM, []string{"qcow2", "raw", "vhd", "vhdx"}, true},
 		{testframework.Container, []string{"oci"}, true},
 		{testframework.SSH, nil, false},
 		{testframework.Host, nil, false},
@@ -197,6 +197,10 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 					return string(pinnedRequirements), nil
 				}
 
+				if command.Args[0] == "qemu-img" {
+					return `{"format":"qcow2"}`, nil
+				}
+
 				exports = append(exports, command)
 				if command.Args[0] == "podman" {
 					assert.Equal(t, []string{"podman", "pull", "--quiet", "oci-archive:/images/image"}, command.Args)
@@ -233,14 +237,16 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 				assert.NotContains(t, command.Args, untouched)
 			}
 
+			nativeDir := command.Args[slices.Index(command.Args, "--id")+1]
+			assert.True(t, strings.HasPrefix(nativeDir, "/var/tmp/azlt-"))
 			expected := []string{
-				"run", "--all", "--keep", "--workdir-root", "/work/run/tmt",
+				"run", "--all", "--keep", "--workdir-root", filepath.Dir(nativeDir), "--id", nativeDir,
 				"plan", "--name", planName, "provision", "--how",
 			}
 
 			switch strategy {
 			case testframework.VM:
-				expected = append(expected, "virtual", "--become", "--image", "/images/image",
+				expected = append(expected, "virtual", "--become", "--image", "/images/image", "--user", "azureuser",
 					"--hardware", "cpu.cores = 4", "--hardware", "memory >= 4 GB", "--hardware", "boot.method = uefi")
 
 				assert.Equal(t, "tmt[provision-virtual]", commands[1].Args[len(commands[1].Args)-1])
@@ -259,7 +265,12 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 
 			if strategy != testframework.VM {
 				assert.Equal(t, "tmt", commands[1].Args[len(commands[1].Args)-1])
-				assert.NotContains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
+
+				if strategy == testframework.SSH {
+					assert.Contains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
+				} else {
+					assert.NotContains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
+				}
 			}
 
 			if strategy == testframework.SSH || strategy == testframework.Host {
@@ -614,7 +625,12 @@ func TestPinnedSourceUsesFreshCheckoutAndEnvironment(t *testing.T) {
 	assert.Equal(t, checkout, commands[4].Dir)
 	assert.NotEqual(t, firstCheckout, checkout)
 	assert.NotEqual(t, firstPython, commands[3].Args[0])
-	assert.Contains(t, commands[4].Args, "/work/next-run/tmt")
+	nativeDir := commands[4].Args[slices.Index(commands[4].Args, "--id")+1]
+	assert.True(t, strings.HasPrefix(nativeDir, "/var/tmp/azlt-"))
+	assert.NotContains(t, commands[4].Args, "/work/next-run/tmt")
+
+	_, err = fileutils.ReadFile(ctx.FS(), "/work/next-run/tmt/tmt-output.log")
+	require.NoError(t, err, "native output must be collected into the requested output directory")
 
 	for _, path := range []string{filepath.Dir(firstCheckout), filepath.Dir(checkout)} {
 		exists, checkErr := fileutils.Exists(ctx.FS(), path)
@@ -811,7 +827,7 @@ func newRunContext(t *testing.T) *testctx.TestCtx {
 	ctx := testctx.NewCtx()
 
 	ctx.Ctx = t.Context()
-	for _, program := range []string{"python3", "sudo", "podman"} {
+	for _, program := range []string{"python3", "sudo", "podman", "qemu-img"} {
 		ctx.CmdFactory.RegisterCommandInSearchPath(program)
 	}
 
@@ -822,6 +838,10 @@ func newRunContext(t *testing.T) *testctx.TestCtx {
 	writeFile(t, ctx, "/packages/tests.rpm", "rpm")
 	writeFile(t, ctx, "/keys/id", "fake key")
 	ctx.CmdFactory.RunAndGetOutputHandler = func(command *exec.Cmd) (string, error) {
+		if command.Args[0] == "qemu-img" {
+			return `{"format":"qcow2"}`, nil
+		}
+
 		if command.Args[0] == "podman" {
 			return imageID + "\n", nil
 		}

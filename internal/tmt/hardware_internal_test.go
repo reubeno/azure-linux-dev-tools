@@ -119,6 +119,39 @@ func TestResolvedPlanHardwareDryRun(t *testing.T) {
 	assert.Equal(t, []string{"boot.method = uefi"}, actual)
 }
 
+func TestResolvedPlanVirtualUser(t *testing.T) {
+	for _, test := range []struct {
+		name, output, user, wantError string
+	}{
+		{"default user", `[{"name":"/smoke","provision":[{"how":"virtual"}]}]`, "azureuser", ""},
+		{"no provision", `[{"name":"/smoke"}]`, "azureuser", ""},
+		{"declared user", `[{"name":"/smoke","provision":[{"user":"tester"}]}]`, "tester", ""},
+		{"empty user", `[{"name":"/smoke","provision":[{"user":""}]}]`, "", "non-empty string"},
+		{"invalid user", `[{"name":"/smoke","provision":[{"user":true}]}]`, "", "non-empty string"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := testctx.NewCtx()
+			ctx.CmdFactory.RunAndGetOutputHandler = func(cmd *exec.Cmd) (string, error) {
+				assert.Equal(t, []string{
+					"/venv/tmt", "-c", "distro=azurelinux-4", "plan", "export", "/smoke", "--how", "json",
+				}, cmd.Args)
+
+				return test.output, nil
+			}
+
+			_, user, err := resolvedPlanSettings(ctx, "/source", "/venv/tmt", "/smoke", "-c", "distro=azurelinux-4")
+			if test.wantError != "" {
+				require.ErrorContains(t, err, test.wantError)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, test.user, user)
+		})
+	}
+}
+
 func TestCommandOutputRetainsStderr(t *testing.T) {
 	ctx := testctx.NewCtx()
 	expected := errors.New("native failure")
@@ -168,6 +201,8 @@ func TestTestcloudPluginRepairsPermissionsBeforePull(t *testing.T) {
 	assert.Contains(t, text, "\nfrom tmt.guest import GuestSsh\n")
 	assert.Contains(t, text, "_azldev_original_pull = GuestSsh.pull")
 	assert.Contains(t, text, "GuestSsh.pull = _azldev_pull")
+	assert.Contains(t, text, `testcloud.USER_DATA.count("ssh_pwauth: true") != 1`)
+	assert.Contains(t, text, `testcloud.USER_DATA.replace("ssh_pwauth: true", "ssh_pwauth: false")`)
 	assert.Contains(t, text, `if self.user != "root":`)
 	assert.Contains(t, text, "source=source, destination=destination, options=options")
 	_, encoded, found := strings.Cut(text, "testcloud.TESTCLOUD_WORKAROUNDS.extend(")
@@ -179,10 +214,15 @@ func TestTestcloudPluginRepairsPermissionsBeforePull(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(encoded), &workarounds))
 	assert.Equal(t, []string{
 		"id -u fedora >/dev/null 2>&1 || useradd --create-home --groups wheel fedora",
-		"firewall-cmd --add-service=ssh || :",
+		"if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then " +
+			"firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp; fi",
 	}, workarounds)
-	assert.Contains(t, text, "firewall-cmd --add-service=ssh || :")
-	assert.NotContains(t, text, "firewall-cmd --add-port=10022/tcp || :")
+	assert.Contains(t, text, "firewall-cmd --add-port=10022/tcp")
+	assert.NotContains(t, text, "systemctl stop firewalld")
+	assert.NotContains(t, text, "--permanent")
+	assert.Contains(t, text, "waiting = _azldev_original_waiting()")
+	assert.Contains(t, text, "waiting.tick = min(waiting.tick, 1.0)")
+	assert.NotContains(t, text, "waiting.deadline =")
 	assert.Less(t, strings.Index(text, `Command("sudo", "chmod", "-R", "a+rX", path)`),
 		strings.Index(text, "return _azldev_original_pull("))
 }

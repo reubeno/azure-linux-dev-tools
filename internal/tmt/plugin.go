@@ -17,6 +17,12 @@ const testcloudPluginTemplate = `import tmt.steps.provision.testcloud as testclo
 from tmt.guest import GuestSsh
 from tmt.utils import Command
 
+# Guest access uses the generated key. Do not enable password SSH on an image
+# whose own policy disables it.
+if testcloud.USER_DATA.count("ssh_pwauth: true") != 1:
+	raise RuntimeError("Unsupported TMT cloud-init SSH template")
+testcloud.USER_DATA = testcloud.USER_DATA.replace("ssh_pwauth: true", "ssh_pwauth: false")
+
 testcloud.TESTCLOUD_WORKAROUNDS.extend(%s)
 
 # Finish tasks pull their artifacts immediately. A later finish task cannot
@@ -32,26 +38,54 @@ def _azldev_pull(self, source=None, destination=None, options=None):
 GuestSsh.pull = _azldev_pull
 `
 
-func writeTestcloudPlugin(ctx opctx.Ctx, workDir string) (string, error) {
+// The pinned TMT release uses a 30-second default poll interval when starting
+// each SSH master, even when authentication completes immediately. Preserve its
+// deadline and backoff policy but check readiness at most one second apart.
+const sshWaitingPlugin = `
+import tmt.guest as _azldev_guest
+
+_azldev_original_waiting = _azldev_guest.default_ssh_master_start_waiting
+
+def _azldev_ssh_waiting():
+    waiting = _azldev_original_waiting()
+    waiting.tick = min(waiting.tick, 1.0)
+    return waiting
+
+_azldev_guest.default_ssh_master_start_waiting = _azldev_ssh_waiting
+`
+
+func writeTestcloudPlugin(ctx opctx.Ctx, workDir string, extraRuncmds ...string) (string, error) {
 	workarounds := []string{
 		"id -u fedora >/dev/null 2>&1 || useradd --create-home --groups wheel fedora",
-		"firewall-cmd --add-service=ssh || :",
+		// Testcloud 0.12 waits for its guest HTTP service on TCP 10022 before
+		// attempting SSH. Open only these temporary guest rules, not the firewall.
+		"if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then " +
+			"firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp; fi",
 	}
+	workarounds = append(workarounds, extraRuncmds...)
 
 	encoded, err := json.Marshal(workarounds)
 	if err != nil {
 		return "", fmt.Errorf("encode testcloud workarounds:\n%w", err)
 	}
 
+	return writePlugin(ctx, workDir, "azldev_testcloud.py",
+		fmt.Sprintf(testcloudPluginTemplate, encoded)+sshWaitingPlugin)
+}
+
+func writeSSHPlugin(ctx opctx.Ctx, workDir string) (string, error) {
+	return writePlugin(ctx, workDir, "azldev_ssh.py", sshWaitingPlugin)
+}
+
+func writePlugin(ctx opctx.Ctx, workDir, name, body string) (string, error) {
 	pluginDir := filepath.Join(workDir, "tmt-plugins")
 	if err := fileutils.MkdirAll(ctx.FS(), pluginDir); err != nil {
 		return "", fmt.Errorf("create testcloud plugin directory:\n%w", err)
 	}
 
-	plugin := fmt.Sprintf(testcloudPluginTemplate, encoded)
-	pluginPath := filepath.Join(pluginDir, "azldev_testcloud.py")
+	pluginPath := filepath.Join(pluginDir, name)
 
-	if err := fileutils.WriteFile(ctx.FS(), pluginPath, []byte(plugin), fileperms.PrivateFile); err != nil {
+	if err := fileutils.WriteFile(ctx.FS(), pluginPath, []byte(body), fileperms.PrivateFile); err != nil {
 		return "", fmt.Errorf("write testcloud plugin:\n%w", err)
 	}
 

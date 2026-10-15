@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
 	"github.com/microsoft/azure-linux-dev-tools/internal/global/opctx"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/testsource"
@@ -20,6 +21,7 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/prereqs"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/pythonenv"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/qemu"
 )
 
 //go:embed requirements.txt
@@ -34,6 +36,26 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (testframe
 	}
 
 	err := r.run(ctx, request, result.OutputDir)
+	if !ctx.DryRun() {
+		entries, resultErr := CollectResults(ctx.FS(), result.OutputDir)
+		err = errors.Join(err, resultErr)
+
+		for _, entry := range entries {
+			result.Cases = append(result.Cases, testframework.CaseResult{
+				Name: entry.Name, Status: entry.Status, Duration: entry.Duration, OutputPath: entry.OutputPath,
+			})
+		}
+
+		if request.JUnitPath != "" && len(entries) > 0 {
+			reportErr := WriteJUnit(ctx.FS(), request.JUnitPath, entries)
+
+			err = errors.Join(err, reportErr)
+			if reportErr == nil {
+				result.JUnitPath = request.JUnitPath
+			}
+		}
+	}
+
 	result.Duration = time.Since(started)
 
 	switch {
@@ -53,8 +75,7 @@ func (r *Runner) Run(ctx opctx.Ctx, request testframework.RunRequest) (testframe
 		result.Error = err.Error()
 	}
 
-	// Native report plugins belong to the plan. The default display reporter
-	// does not produce JUnit, so do not advertise the requested path as a report.
+	// Collect native results without overriding the plan's report plugins.
 	return result, err
 }
 
@@ -96,22 +117,17 @@ func (r *Runner) run(ctx opctx.Ctx, request testframework.RunRequest, outputDir 
 		return err
 	}
 
-	program, err := prepareEnvironment(ctx, request, privateDir)
+	program, err := r.prepareEnvironment(ctx, request, privateDir)
 	if err != nil {
 		return err
 	}
 
-	pluginDir, err := prepareRunDir(ctx, request)
+	pluginDir, err := r.prepareRunDir(ctx, request)
 	if err != nil {
 		return err
 	}
 
-	args, err := r.prepareArguments(ctx, request, runDir, program, outputDir)
-	if err != nil {
-		return err
-	}
-
-	if err := runTMTCommand(ctx, runDir, pluginDir, program, request.Execution.Strategy, args...); err != nil {
+	if err := r.executeAndCollect(ctx, request, runDir, program, pluginDir, outputDir); err != nil {
 		return fmt.Errorf("run TMT (artifacts: %#q):\n%w", outputDir, err)
 	}
 
@@ -122,18 +138,28 @@ func (r *Runner) prepareArguments(ctx opctx.Ctx, request testframework.RunReques
 	runDir, program, outputDir string,
 ) ([]string, error) {
 	var (
-		hardware []string
-		err      error
+		hardware    []string
+		virtualUser string
+		err         error
 	)
 
 	if request.Execution.Strategy == testframework.VM {
-		hardware, err = resolvedPlanHardwareArgs(ctx, runDir, program, r.plan(request.Execution))
+		hardware, virtualUser, err = resolvedPlanSettings(
+			ctx, runDir, program, r.plan(request.Execution), r.config.globalArgs(false)...)
 		if err != nil {
 			return nil, fmt.Errorf("resolve TMT plan hardware:\n%w", err)
 		}
 	}
 
 	imageArgument := request.ImagePath()
+	if request.Execution.Strategy == testframework.VM {
+		imageArgument, err = qemu.EnsureQcow2(ctx, imageArgument,
+			filepath.Join(filepath.Dir(outputDir), "image.qcow2"))
+		if err != nil {
+			return nil, fmt.Errorf("prepare TMT disk image:\n%w", err)
+		}
+	}
+
 	if request.Execution.Strategy == testframework.Container && filepath.IsAbs(imageArgument) {
 		imageArgument, err = importContainerImage(ctx, imageArgument)
 		if err != nil {
@@ -141,7 +167,9 @@ func (r *Runner) prepareArguments(ctx opctx.Ctx, request testframework.RunReques
 		}
 	}
 
-	return runArgs(r.plan(request.Execution), request, outputDir, hardware, imageArgument), nil
+	args := r.runArgs(r.plan(request.Execution), request, outputDir, hardware, imageArgument, virtualUser)
+
+	return append(r.config.globalArgs(ctx.Verbose()), args...), nil
 }
 
 func (r *Runner) validateRequest(request testframework.RunRequest) error {
@@ -257,10 +285,12 @@ func validateSource(ctx opctx.Ctx, sourceDir string) error {
 	return nil
 }
 
-func prepareEnvironment(ctx opctx.Ctx, request testframework.RunRequest, privateDir string) (string, error) {
+func (r *Runner) prepareEnvironment(ctx opctx.Ctx,
+	request testframework.RunRequest, privateDir string,
+) (string, error) {
 	requirement := "tmt"
-	if request.Execution.Strategy == testframework.VM {
-		requirement = "tmt[provision-virtual]"
+	if extras := r.config.installExtras(request.Execution.Strategy); len(extras) > 0 {
+		requirement += "[" + strings.Join(extras, ",") + "]"
 	}
 
 	venvDir := filepath.Join(privateDir, "venv")
@@ -286,7 +316,7 @@ func prepareEnvironment(ctx opctx.Ctx, request testframework.RunRequest, private
 	return filepath.Join(venvDir, "bin", "tmt"), nil
 }
 
-func prepareRunDir(ctx opctx.Ctx, request testframework.RunRequest) (string, error) {
+func (r *Runner) prepareRunDir(ctx opctx.Ctx, request testframework.RunRequest) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("prepare TMT run cancelled:\n%w", err)
 	}
@@ -295,11 +325,15 @@ func prepareRunDir(ctx opctx.Ctx, request testframework.RunRequest) (string, err
 		return "", fmt.Errorf("create TMT work directory:\n%w", err)
 	}
 
+	if request.Execution.Strategy == testframework.SSH {
+		return writeSSHPlugin(ctx, request.WorkDir)
+	}
+
 	if request.Execution.Strategy != testframework.VM {
 		return "", nil
 	}
 
-	return writeTestcloudPlugin(ctx, request.WorkDir)
+	return writeTestcloudPlugin(ctx, request.WorkDir, r.config.CloudInitRuncmds...)
 }
 
 func importContainerImage(ctx opctx.Ctx, imagePath string) (string, error) {
@@ -310,38 +344,18 @@ func importContainerImage(ctx opctx.Ctx, imagePath string) (string, error) {
 		return "", fmt.Errorf("import TMT container image:\n%w", err)
 	}
 
-	image := strings.TrimSpace(output)
-	if !strings.HasPrefix(image, "sha256:") {
-		image = "sha256:" + image
-	}
-
-	if !isContainerImageID(image) {
-		return "", errors.New("podman did not return a single imported image ID")
+	image, err := artifact.ParseContainerImageID(output)
+	if err != nil {
+		return "", fmt.Errorf("podman did not return a single imported image ID:\n%w", err)
 	}
 
 	return image, nil
 }
 
 func isContainerImageID(image string) bool {
-	if !strings.HasPrefix(image, "sha256:") {
-		return false
-	}
+	normalized, err := artifact.ParseContainerImageID(image)
 
-	digest := strings.TrimPrefix(image, "sha256:")
-
-	const digestLength = 64
-
-	if len(digest) != digestLength {
-		return false
-	}
-
-	for _, character := range digest {
-		if !strings.ContainsRune("0123456789abcdef", character) {
-			return false
-		}
-	}
-
-	return true
+	return err == nil && normalized == image
 }
 
 func dirsOverlap(first, second string) bool {

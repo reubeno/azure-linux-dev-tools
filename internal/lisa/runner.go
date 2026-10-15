@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/prereqs"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/pythonenv"
+	"github.com/microsoft/azure-linux-dev-tools/internal/utils/qemu"
 )
 
 // Requirements describes the actual environment booted by LISA's QEMU platform.
@@ -40,7 +42,7 @@ func (r *Runner) Requirements(spec testframework.ExecutionSpec) (testframework.R
 	}
 
 	return testframework.Requirements{
-		ImageRequired: true, ImageFormats: []string{"qcow2"}, LiveImage: true, PackagesSupported: true,
+		ImageRequired: true, ImageFormats: qemu.DiskFormats(), LiveImage: true, PackagesSupported: true,
 	}, nil
 }
 
@@ -141,6 +143,15 @@ func (r *Runner) execute(
 	ctx opctx.Ctx, frameworkDir, privateDir string,
 	request testframework.RunRequest, result *testframework.RunResult,
 ) error {
+	imagePath, err := qemu.EnsureQcow2(ctx, request.ImagePath(), filepath.Join(privateDir, "image.qcow2"))
+	if err != nil {
+		return fmt.Errorf("prepare LISA disk image:\n%w", err)
+	}
+
+	image := *request.Image
+	image.Path, image.Format, image.SHA256 = imagePath, "qcow2", ""
+	request.Image = &image
+
 	python, err := r.preparePython(ctx, frameworkDir)
 	if err != nil {
 		return err
@@ -184,7 +195,8 @@ func (r *Runner) execute(
 		return fmt.Errorf("remove previous LISA report:\n%w", removeErr)
 	}
 
-	runErr := externalcmd.Run(ctx, request.WorkDir, filepath.Join(filepath.Dir(python), "lisa"), args...)
+	runErr := externalcmd.RunInterruptible(ctx, filepath.Join(frameworkDir, "lisa"),
+		filepath.Join(filepath.Dir(python), "lisa"), time.Minute, args...)
 
 	return finishRun(ctx, request.JUnitPath, runErr, result)
 }
@@ -227,8 +239,9 @@ func validateRequest(request testframework.RunRequest) error {
 		return errors.New("LISA requires absolute work, cache, and JUnit paths")
 	}
 
-	if !filepath.IsAbs(request.ImagePath()) || request.Image == nil || request.Image.Format != "qcow2" {
-		return errors.New("LISA requires an absolute path to a qcow2 image")
+	if !filepath.IsAbs(request.ImagePath()) || request.Image == nil ||
+		!slices.Contains(qemu.DiskFormats(), request.Image.Format) {
+		return errors.New("LISA requires an absolute path to a supported disk image")
 	}
 
 	for _, path := range request.RPMPaths() {

@@ -25,14 +25,14 @@ const (
 
 // ExecutionSpec selects an environment and optional developer source overrides.
 type ExecutionSpec struct {
-	Strategy     Strategy
-	SourceDir    string
-	FrameworkDir string
-	Plan         string
-	SSHHost      string
-	SSHUser      string
-	SSHKey       string
-	SSHPort      int
+	Strategy     Strategy `json:"strategy"`
+	SourceDir    string   `json:"sourceDir,omitempty"`
+	FrameworkDir string   `json:"frameworkDir,omitempty"`
+	Plan         string   `json:"plan,omitempty"`
+	SSHHost      string   `json:"sshHost,omitempty"`
+	SSHUser      string   `json:"sshUser,omitempty"`
+	SSHKey       string   `json:"sshKey,omitempty"`
+	SSHPort      int      `json:"sshPort,omitempty"`
 }
 
 // Validate rejects incomplete or contradictory execution requests.
@@ -121,6 +121,15 @@ type RunResult struct {
 	OutputDir string        `json:"outputDir"`
 	JUnitPath string        `json:"junitPath,omitempty"`
 	Error     string        `json:"error,omitempty"     table:"-"`
+	Cases     []CaseResult  `json:"cases,omitempty"     table:"-"`
+}
+
+// CaseResult preserves framework-native outcomes without reducing a run to an exit code.
+type CaseResult struct {
+	Name       string        `json:"name"`
+	Status     string        `json:"status"`
+	Duration   time.Duration `json:"duration"`
+	OutputPath string        `json:"outputPath,omitempty"`
 }
 
 // ErrTestFailed distinguishes failing assertions from setup and execution errors.
