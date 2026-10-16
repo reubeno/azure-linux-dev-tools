@@ -26,6 +26,7 @@ import (
 const (
 	candidateRPMPrepareStepName = "azldev-candidate-rpms"
 	exitAllTestsSkipped         = 4
+	exitNoResults               = 3
 )
 
 func (r *Runner) runArgs(
@@ -199,6 +200,9 @@ func commandResult(ctx opctx.Ctx, err error, stderr string) (testframework.Statu
 					fmt.Errorf("%w (%s):\n%w", testframework.ErrTestFailed, strings.TrimSpace(stderr), err)
 			case exitAllTestsSkipped:
 				return testframework.Skipped, nil
+			case exitNoResults:
+				return testframework.Errored, fmt.Errorf("TMT collected no tests (%s):\n%w",
+					strings.TrimSpace(stderr), errors.Join(testframework.ErrNoTests, err))
 			}
 		}
 

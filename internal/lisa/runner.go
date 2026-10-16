@@ -160,6 +160,10 @@ func (r *Runner) execute(
 		return err
 	}
 
+	if err := pythonenv.Freeze(ctx, python, filepath.Join(request.WorkDir, "python-environment.txt")); err != nil {
+		return fmt.Errorf("record LISA runtime:\n%w", err)
+	}
+
 	keyPath := filepath.Join(privateDir, "id_rsa")
 
 	if err := prereqs.RequireExecutable(ctx, "ssh-keygen", nil); err != nil {
@@ -222,6 +226,13 @@ func finishRun(ctx opctx.Ctx, junitPath string, runErr error, result *testframew
 	}
 
 	native := nativeExitStatus(runErr, cases)
+	// LISA attaches failed deployment/initialization to the first selected case
+	// with this phase prefix, even though no test assertion has executed.
+	for index := range cases {
+		if cases[index].Status == testframework.Failed && strings.HasPrefix(cases[index].Message, "deployment failed.") {
+			cases[index].Status = testframework.Errored
+		}
+	}
 
 	result.Status, err = testframework.ResolveOutcome(native, runErr, cases)
 	if err != nil {

@@ -21,6 +21,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDestinationRelationshipValidation(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"/source", "/source"},
+		{"/source", "/source/nested"},
+		{"/source/nested", "/source"},
+		{"/source", "/"},
+		{"relative", "/dest"},
+		{"/source", "relative"},
+	} {
+		require.Error(t, testsource.CheckDestination(pair[0], pair[1]))
+	}
+
+	require.NoError(t, testsource.CheckDestination("/source", "/source-other"))
+	require.NoError(t, testsource.CheckDestination("", "/destination"))
+}
+
 func TestLocalSourcesAreNeverCheckedOut(t *testing.T) {
 	env := testutils.NewTestEnv(t)
 	require.NoError(t, fileutils.MkdirAll(env.TestFS, "/checkout"))
@@ -58,7 +74,7 @@ func TestManagedSourcesNeverReuseDirtyCheckouts(t *testing.T) {
 	assert.NotEqual(t, first, second)
 	require.Len(t, env.CommandsExecuted, 4)
 	assert.Contains(t, env.CommandsExecuted[1], source.Ref)
-	assert.Equal(t, []string{"git", "clone", source.GitURL, second}, env.CommandsExecuted[2])
+	assert.Equal(t, []string{"git", "clone", "--no-hardlinks", source.GitURL, second}, env.CommandsExecuted[2])
 	exists, err := fileutils.Exists(env.TestFS, second+"/dirty.py")
 	require.NoError(t, err)
 	assert.False(t, exists)

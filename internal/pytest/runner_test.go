@@ -29,6 +29,19 @@ const (
 	passedJUnit        = `<testsuite tests="1"><testcase name="test" time="0.25"/></testsuite>`
 )
 
+func newContext(t *testing.T) *testctx.TestCtx {
+	t.Helper()
+
+	ctx := testctx.NewCtx()
+	ctx.CmdFactory.RunAndGetOutputHandler = func(cmd *exec.Cmd) (string, error) {
+		assert.Contains(t, cmd.Args[len(cmd.Args)-1], "importlib.metadata")
+
+		return "# Python fixture\npytest==9.0.2", nil
+	}
+
+	return ctx
+}
+
 func request() testframework.RunRequest {
 	return testframework.RunRequest{
 		Execution:   testframework.ExecutionSpec{Strategy: testframework.Host},
@@ -57,7 +70,7 @@ func preparedNone(t *testing.T, ctx *testctx.TestCtx, _ string) {
 }
 
 func TestInvocationAndExpansion(t *testing.T) {
-	ctx := testctx.NewCtx()
+	ctx := newContext(t)
 	ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 	ctx.VerboseValue = true
 	write(t, ctx, "/tests/cases/test_one.py", "")
@@ -130,7 +143,7 @@ func TestNativeOutcomes(t *testing.T) {
 		{"launch", errors.New("launch failed"), testframework.Errored, false},
 	} {
 		t.Run(item.name, func(t *testing.T) {
-			ctx := testctx.NewCtx()
+			ctx := newContext(t)
 			ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 			preparedNone(t, ctx, "")
 
@@ -215,7 +228,7 @@ func TestConfigurationAndRequirements(t *testing.T) {
 }
 
 func TestDryRunAndMissingManifest(t *testing.T) {
-	ctx := testctx.NewCtx()
+	ctx := newContext(t)
 	ctx.DryRunValue = true
 	ctx.CmdFactory.RunHandler = func(_ *exec.Cmd) error {
 		t.Fatal("dry-run executed a command")
@@ -241,7 +254,7 @@ func TestDryRunAndMissingManifest(t *testing.T) {
 func TestInstallModesAndSetupFailure(t *testing.T) {
 	for _, mode := range []string{"pyproject", "requirements", installNone} {
 		t.Run(mode, func(t *testing.T) {
-			ctx := testctx.NewCtx()
+			ctx := newContext(t)
 			ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 			require.NoError(t, fileutils.MkdirAll(ctx.FS(), "/tests"))
 
@@ -275,7 +288,7 @@ func TestInstallModesAndSetupFailure(t *testing.T) {
 }
 
 func TestPinnedSourceAndLocalOverride(t *testing.T) {
-	ctx := testctx.NewCtx()
+	ctx := newContext(t)
 	ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 	write(t, ctx, "/checkout/suite/pyproject.toml", "")
 
@@ -307,7 +320,7 @@ func TestPinnedSourceAndLocalOverride(t *testing.T) {
 }
 
 func TestCancellation(t *testing.T) {
-	ctx := testctx.NewCtx()
+	ctx := newContext(t)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -322,7 +335,7 @@ func TestCancellation(t *testing.T) {
 }
 
 func TestMissingReportCannotReuseStaleResult(t *testing.T) {
-	ctx := testctx.NewCtx()
+	ctx := newContext(t)
 	ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 	preparedNone(t, ctx, "")
 	write(t, ctx, request().JUnitPath, passedJUnit)
@@ -336,7 +349,7 @@ func TestMissingReportCannotReuseStaleResult(t *testing.T) {
 }
 
 func TestRPMOnlyAndEmptyProperties(t *testing.T) {
-	ctx := testctx.NewCtx()
+	ctx := newContext(t)
 	ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 	preparedNone(t, ctx, "")
 
@@ -372,7 +385,7 @@ func TestRPMOnlyAndEmptyProperties(t *testing.T) {
 func TestNoneRequiresCallerPreparedRuntimeWithoutInstalling(t *testing.T) {
 	for _, stage := range []string{missingEnvironment, "partial", "missing-pytest", "prepared"} {
 		t.Run(stage, func(t *testing.T) {
-			ctx := testctx.NewCtx()
+			ctx := newContext(t)
 			require.NoError(t, ctx.OSEnv().Chdir("/tests"))
 			write(t, ctx, "/tests/test_original.py", "original")
 
@@ -445,7 +458,7 @@ func TestNoneRequiresCallerPreparedRuntimeWithoutInstalling(t *testing.T) {
 }
 
 func TestOverlappingRequestsNeverMutateCallerSourcesOrEachOther(t *testing.T) {
-	ctx := testctx.NewCtx()
+	ctx := newContext(t)
 	ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 	write(t, ctx, "/tests/pyproject.toml", "original")
 	write(t, ctx, "/tests/test_original.py", "original")
@@ -520,7 +533,7 @@ func TestProjectRootWithNestedCacheKeepsCallerContentsUnchanged(t *testing.T) {
 	for _, mode := range []string{"pyproject", installNone} {
 		for _, sourceOverride := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/source-override=%t", mode, sourceOverride), func(t *testing.T) {
-				ctx := testctx.NewCtx()
+				ctx := newContext(t)
 				ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 
 				const root = "/fixture"
@@ -595,7 +608,8 @@ func TestProjectRootWithNestedCacheKeepsCallerContentsUnchanged(t *testing.T) {
 
 				after, err := fileutils.Glob(ctx.FS(), root+"/**/*")
 				require.NoError(t, err)
-				assert.Equal(t, before, after, "no runtime files may be added to the caller tree")
+				assert.ElementsMatch(t, append(before, filepath.Join(req.WorkDir, "python-environment.txt")), after,
+					"only the requested runtime report may be added under the caller's output directory")
 
 				for path, original := range originals {
 					data, readErr := fileutils.ReadFile(ctx.FS(), path)
@@ -611,7 +625,7 @@ func TestSetupFailureAndCancellationCannotPoisonNextRun(t *testing.T) {
 	for _, stage := range []string{"venv", "pip"} {
 		for _, cancelled := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/cancelled=%t", stage, cancelled), func(t *testing.T) {
-				ctx := testctx.NewCtx()
+				ctx := newContext(t)
 
 				cancelCtx, cancel := context.WithCancel(t.Context())
 				defer cancel()

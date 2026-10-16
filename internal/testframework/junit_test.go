@@ -123,3 +123,32 @@ func TestResolveOutcomePreservesExecutionAndReportFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveOutcomeRequiresConsistentSuccessfulExit(t *testing.T) {
+	for _, status := range []testframework.Status{testframework.Passed, testframework.Skipped} {
+		cases := []testframework.CaseResult{{Name: "case", Status: status}}
+		got, err := testframework.ResolveOutcome(testframework.Passed, nil, cases)
+		require.NoError(t, err)
+		assert.Equal(t, status, got)
+
+		nativeErr := errors.New("native error")
+		got, err = testframework.ResolveOutcome(testframework.Passed, nativeErr, cases)
+		require.ErrorIs(t, err, nativeErr)
+		assert.Equal(t, testframework.Errored, got)
+	}
+}
+
+func TestJUnitRetainsIdentityAndAcceptsZeroDuration(t *testing.T) {
+	ctx := testctx.NewCtx()
+	data := `<testsuite><testcase name="case" classname="suite" time="0"><skipped>reason</skipped></testcase></testsuite>`
+	require.NoError(t, fileutils.WriteFile(ctx.FS(), "/report", []byte(data), fileperms.PrivateFile))
+	cases, err := testframework.ReadJUnit(ctx.FS(), "/report")
+	require.NoError(t, err)
+	require.Len(t, cases, 1)
+	assert.Equal(t, "suite", cases[0].ClassName)
+	assert.Equal(t, "reason", cases[0].Message)
+	assert.Zero(t, cases[0].Duration)
+	require.NoError(t, fileutils.WriteFile(ctx.FS(), "/report", []byte(data+"<"), fileperms.PrivateFile))
+	_, err = testframework.ReadJUnit(ctx.FS(), "/report")
+	require.ErrorContains(t, err, "trailing")
+}

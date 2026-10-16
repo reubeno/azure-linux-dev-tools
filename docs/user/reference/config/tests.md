@@ -176,6 +176,12 @@ arguments.
 appended automatically; do not add it to `extra-args`. Relative CLI paths, including `--junit-xml`, are resolved against the selected
 project directory (including `-C`), not the framework's working directory.
 
+Absolute pytest selectors outside the configured working directory remain explicit
+caller-owned paths for compatibility; they are not copied into the private source
+tree. Pytest's cache and bytecode writes are kept off those source paths. Prefer
+selectors within the declared source tree when a fully private source snapshot is
+required.
+
 #### Placeholders
 
 The following placeholders may appear in pytest and LISA `extra-args` and are

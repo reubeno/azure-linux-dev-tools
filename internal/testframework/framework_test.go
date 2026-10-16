@@ -4,6 +4,7 @@
 package testframework_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/artifact"
@@ -69,4 +70,35 @@ func TestNativePathsPreserveInputIdentity(t *testing.T) {
 
 	assert.Equal(t, "/one.rpm", request.Packages[0].Path)
 	assert.Equal(t, "identity", request.Image.SHA256)
+}
+
+func TestMaterializedInputValidation(t *testing.T) {
+	imageID := "sha256:" + strings.Repeat("a", 64)
+	for _, request := range []testframework.RunRequest{
+		{Image: &artifact.Artifact{Path: "relative"}},
+		{Image: &artifact.Artifact{Path: "/file", OCIImageID: imageID, Format: "oci"}},
+		{Packages: []artifact.Artifact{{Path: "relative", Format: "rpm"}}},
+		{Packages: []artifact.Artifact{{Path: "/file", Format: "raw"}}},
+		{Packages: []artifact.Artifact{{OCIImageID: imageID, Format: "rpm"}}},
+	} {
+		require.Error(t, request.ValidateInputs())
+	}
+
+	for _, request := range []testframework.RunRequest{
+		{},
+		{Image: &artifact.Artifact{Path: "/file", Format: "raw"}},
+		{Image: &artifact.Artifact{OCIImageID: imageID, Format: "oci"}},
+		{Packages: []artifact.Artifact{{Path: "/candidate.rpm", Format: "rpm"}}},
+	} {
+		require.NoError(t, request.ValidateInputs())
+	}
+}
+
+func TestSSHConnectionRejectsUnsafeValues(t *testing.T) {
+	for _, invalid := range []string{"-option", "user@host", "a/b", "a\x00b", "two words"} {
+		require.Error(t, (testframework.SSHConnection{Host: invalid, User: "user"}).Validate())
+		require.Error(t, (testframework.SSHConnection{Host: "host", User: invalid}).Validate())
+	}
+
+	require.Error(t, (testframework.SSHConnection{Host: "host", User: "user", KeyPath: "relative"}).Validate())
 }

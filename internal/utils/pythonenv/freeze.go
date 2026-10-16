@@ -14,13 +14,21 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 )
 
-// Freeze records the actual installed dependencies before a private environment is removed.
+// Freeze records installed distributions without requiring pip or changing the environment.
 func Freeze(ctx opctx.Ctx, python, destination string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("runtime dependency query cancelled:\n%w", err)
+	}
+
 	if ctx.DryRun() {
 		return nil
 	}
 
-	raw := exec.CommandContext(ctx, python, "-m", "pip", "freeze")
+	const metadataScript = "import importlib.metadata as m, sys; " +
+		"print('# Python ' + sys.version.replace('\\n', ' ')); " +
+		"print('\\n'.join(sorted(d.metadata['Name'] + '==' + d.version for d in m.distributions())))"
+
+	raw := exec.CommandContext(ctx, python, "-I", "-B", "-c", metadataScript)
 
 	var stderr strings.Builder
 

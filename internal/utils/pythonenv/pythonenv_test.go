@@ -89,3 +89,25 @@ func TestExistingRequiresCompleteCallerEnvironmentWithoutCommands(t *testing.T) 
 	assert.Equal(t, "/caller/venv/bin/python3", python)
 	assert.Empty(t, env.CommandsExecuted)
 }
+
+func TestInstallPropagatesFailuresAndCancellation(t *testing.T) {
+	env := testutils.NewTestEnv(t)
+	nativeErr := errors.New("installation failed")
+	env.CmdFactory.RunHandler = func(cmd *exec.Cmd) error {
+		assert.Equal(t, []string{"/python", "-m", "pip", "install", "--quiet", "pytest"}, cmd.Args)
+		assert.Equal(t, "/source", cmd.Dir)
+
+		return nativeErr
+	}
+	require.ErrorIs(t, pythonenv.Install(env.Env, "/python", "/source", "pytest"), nativeErr)
+	cancelled, cancel := env.Env.WithCancel()
+	cancel()
+
+	env.CmdFactory.RunHandler = func(*exec.Cmd) error {
+		t.Fatal("cancelled installation executed")
+
+		return nil
+	}
+
+	require.ErrorIs(t, pythonenv.Install(cancelled, "/python", "/source", "pytest"), context.Canceled)
+}

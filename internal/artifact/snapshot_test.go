@@ -5,6 +5,7 @@ package artifact_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -120,6 +121,24 @@ func TestSnapshotDetectsConcurrentInputMutation(t *testing.T) {
 	exists, err := fileutils.Exists(base.FS(), "/run/input")
 	require.NoError(t, err)
 	assert.False(t, exists)
+}
+
+type cleanupFailureFS struct {
+	opctx.FS
+	failure error
+}
+
+func (fs cleanupFailureFS) RemoveAll(string) error { return fs.failure }
+
+func TestSnapshotReportsPartialCleanupFailure(t *testing.T) {
+	base := testctx.NewCtx()
+	require.NoError(t, fileutils.WriteFile(base.FS(), "/input", []byte("data"), fileperms.PrivateFile))
+
+	cleanupErr := errors.New("cleanup denied")
+	ctx := testctx.NewCtx(testctx.WithFS(cleanupFailureFS{FS: base.FS(), failure: cleanupErr}))
+	_, err := artifact.Snapshot(ctx, artifact.Artifact{Path: "/input", SHA256: strings.Repeat("0", 64)}, "/snapshot")
+	require.ErrorContains(t, err, "SHA-256 mismatch")
+	require.ErrorIs(t, err, cleanupErr)
 }
 
 func TestSnapshotIdentityAndCancellation(t *testing.T) {

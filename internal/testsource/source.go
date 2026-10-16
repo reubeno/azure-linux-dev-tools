@@ -16,7 +16,6 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/externalcmd"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileperms"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
-	"github.com/microsoft/azure-linux-dev-tools/internal/utils/git"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/prereqs"
 )
 
@@ -136,6 +135,10 @@ func CheckDestination(local, destination string) error {
 		return nil
 	}
 
+	if !filepath.IsAbs(local) || !filepath.IsAbs(destination) {
+		return errors.New("test source and destination directories must be absolute")
+	}
+
 	for _, pair := range [][2]string{{local, destination}, {destination, local}} {
 		relative, err := filepath.Rel(pair[0], pair[1])
 		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
@@ -151,12 +154,7 @@ func clone(ctx opctx.Ctx, source *projectconfig.GitSourceConfig, dir string) err
 		return fmt.Errorf("test source prerequisite:\n%w", err)
 	}
 
-	provider, err := git.NewGitProviderImpl(ctx, ctx)
-	if err != nil {
-		return fmt.Errorf("materialize:\n%w", err)
-	}
-
-	if err := provider.Clone(ctx, source.GitURL, dir); err != nil {
+	if err := externalcmd.Run(ctx, "", "git", "clone", "--no-hardlinks", source.GitURL, dir); err != nil {
 		return fmt.Errorf("clone test source:\n%w", err)
 	}
 
@@ -164,7 +162,7 @@ func clone(ctx opctx.Ctx, source *projectconfig.GitSourceConfig, dir string) err
 		return fmt.Errorf("clone test source cancelled:\n%w", err)
 	}
 
-	if err := provider.Checkout(ctx, dir, source.Ref); err != nil {
+	if err := externalcmd.Run(ctx, "", "git", "-C", dir, "checkout", source.Ref); err != nil {
 		return fmt.Errorf("checkout pinned test source:\n%w", err)
 	}
 

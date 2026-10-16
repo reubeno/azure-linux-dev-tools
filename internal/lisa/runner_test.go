@@ -23,6 +23,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const lisaExecutable = "lisa"
+
 func request() testframework.RunRequest {
 	return testframework.RunRequest{
 		Execution:   testframework.ExecutionSpec{Strategy: testframework.VM, FrameworkDir: "/checkout"},
@@ -46,8 +48,14 @@ func setup(t *testing.T) *testctx.TestCtx {
 	ctx.CmdFactory.RegisterCommandInSearchPath("python3")
 	ctx.CmdFactory.RegisterCommandInSearchPath("ssh-keygen")
 	ctx.CmdFactory.RegisterCommandInSearchPath("qemu-img")
-	ctx.CmdFactory.RunAndGetOutputHandler = func(*exec.Cmd) (string, error) {
-		return `{"format":"qcow2"}`, nil
+	ctx.CmdFactory.RunAndGetOutputHandler = func(cmd *exec.Cmd) (string, error) {
+		if cmd.Args[0] == "qemu-img" {
+			return `{"format":"qcow2"}`, nil
+		}
+
+		assert.Contains(t, cmd.Args[len(cmd.Args)-1], "importlib.metadata")
+
+		return "# Python fixture\nmslisa==fixture", nil
 	}
 	write(t, ctx, "/checkout/pyproject.toml", "source remains unchanged")
 	write(t, ctx, "/checkout/lisa/microsoft/runbook/tiers/tier.yml", "extension: [../../testsuites]")
@@ -118,7 +126,7 @@ func TestInvocationRunbookAndCandidates(t *testing.T) {
 			write(t, ctx, command.Args[6]+".pub", "public key")
 		}
 
-		if filepath.Base(command.Args[0]) != "lisa" {
+		if filepath.Base(command.Args[0]) != lisaExecutable {
 			return nil
 		}
 
@@ -315,7 +323,7 @@ func TestNativeReports(t *testing.T) {
 			require.NoError(t, err)
 
 			ctx.CmdFactory.RunHandler = func(command *exec.Cmd) error {
-				if filepath.Base(command.Args[0]) == "lisa" {
+				if filepath.Base(command.Args[0]) == lisaExecutable {
 					write(t, ctx, request().JUnitPath, item.xml)
 
 					if item.status == testframework.Failed {

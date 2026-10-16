@@ -196,7 +196,7 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 				return nil
 			}
 			ctx.CmdFactory.RunAndGetOutputHandler = func(command *exec.Cmd) (string, error) {
-				if slices.Contains(command.Args, "freeze") {
+				if strings.Contains(command.Args[len(command.Args)-1], "importlib.metadata") {
 					return string(pinnedRequirements), nil
 				}
 
@@ -342,7 +342,7 @@ func TestContainerUsesResolvedLocalImageID(t *testing.T) {
 	request := requestFor(testframework.Container)
 	request.Image = &artifact.Artifact{OCIImageID: imageID, Format: "oci"}
 	ctx.CmdFactory.RunAndGetOutputHandler = func(command *exec.Cmd) (string, error) {
-		if slices.Contains(command.Args, "freeze") {
+		if strings.Contains(command.Args[len(command.Args)-1], "importlib.metadata") {
 			return string(pinnedRequirements), nil
 		}
 
@@ -626,7 +626,8 @@ func TestPinnedSourceUsesFreshCheckoutAndEnvironment(t *testing.T) {
 	_, err = runner.Run(ctx, request)
 	require.NoError(t, err)
 	require.Len(t, commands, 5)
-	assert.Equal(t, "https://example.test/tests.git", commands[0].Args[2])
+	assert.Equal(t, "https://example.test/tests.git", commands[0].Args[3])
+	assert.Contains(t, commands[0].Args, "--no-hardlinks")
 	assert.True(t, strings.HasPrefix(filepath.Base(filepath.Dir(checkout)), "azldev-tmt-"))
 	assert.Equal(t, []string{"git", "-C", checkout, "checkout", strings.Repeat("a", 40)}, commands[1].Args)
 	assert.Equal(t, checkout, commands[4].Dir)

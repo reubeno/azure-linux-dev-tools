@@ -21,7 +21,7 @@ import (
 func newPreparedContext(t *testing.T) *testctx.TestCtx {
 	t.Helper()
 
-	ctx := testctx.NewCtx()
+	ctx := newContext(t)
 	require.NoError(t, ctx.OSEnv().Chdir("/tests"))
 	write(t, ctx, "/tests/test.py", "caller source")
 	write(t, ctx, "/project-work/pytest-venv/smoke/bin/python3", "caller Python")

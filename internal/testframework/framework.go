@@ -45,32 +45,45 @@ type SSHConnection struct {
 
 // Validate rejects incomplete or contradictory execution requests.
 func (s ExecutionSpec) Validate() error {
+	for _, directory := range []string{s.SourceDir, s.FrameworkDir} {
+		if directory != "" && !filepath.IsAbs(directory) {
+			return fmt.Errorf("execution source directory must be absolute: %#q", directory)
+		}
+	}
+
 	switch s.Strategy {
 	case VM, Container, Host:
 		if s.SSH != (SSHConnection{}) {
 			return errors.New("SSH options require execution strategy 'ssh'")
 		}
 	case SSH:
-		if s.SSH.Host == "" || s.SSH.User == "" {
-			return errors.New("execution strategy 'ssh' requires a host and user")
-		}
-
-		if s.SSH.Port < 0 || s.SSH.Port > 65535 {
-			return errors.New("SSH port must be between 1 and 65535")
-		}
-
-		for _, option := range []struct{ name, value string }{{"host", s.SSH.Host}, {"user", s.SSH.User}} {
-			if strings.HasPrefix(option.value, "-") || strings.ContainsAny(option.value, "@/\x00") ||
-				strings.ContainsFunc(option.value, unicode.IsSpace) {
-				return fmt.Errorf("invalid SSH %s %#q", option.name, option.value)
-			}
-		}
-
-		if s.SSH.KeyPath != "" && !filepath.IsAbs(s.SSH.KeyPath) {
-			return errors.New("SSH key path must be absolute")
-		}
+		return s.SSH.Validate()
 	default:
 		return fmt.Errorf("unsupported execution strategy %#q", s.Strategy)
+	}
+
+	return nil
+}
+
+// Validate checks the connection independently of its consuming framework.
+func (s SSHConnection) Validate() error {
+	if s.Host == "" || s.User == "" {
+		return errors.New("execution strategy 'ssh' requires a host and user")
+	}
+
+	if s.Port < 0 || s.Port > 65535 {
+		return errors.New("SSH port must be between 1 and 65535")
+	}
+
+	for _, option := range []struct{ name, value string }{{"host", s.Host}, {"user", s.User}} {
+		if strings.HasPrefix(option.value, "-") || strings.ContainsAny(option.value, "@/\x00") ||
+			strings.ContainsFunc(option.value, unicode.IsSpace) {
+			return fmt.Errorf("invalid SSH %s %#q", option.name, option.value)
+		}
+	}
+
+	if s.KeyPath != "" && !filepath.IsAbs(s.KeyPath) {
+		return errors.New("SSH key path must be absolute")
 	}
 
 	return nil

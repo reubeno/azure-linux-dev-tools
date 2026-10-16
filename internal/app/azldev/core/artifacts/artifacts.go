@@ -174,6 +174,10 @@ func (r *Resolver) Packages(name, arch string, selection Selection,
 		builtAt = time.Now().UTC()
 	}
 
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("component %#q produced no binary RPM artifacts", name)
+	}
+
 	result := make([]Artifact, 0, len(paths))
 	for _, path := range paths {
 		if !strings.HasSuffix(path, ".rpm") || strings.HasSuffix(path, ".src.rpm") {

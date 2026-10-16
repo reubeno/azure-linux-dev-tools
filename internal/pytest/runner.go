@@ -28,6 +28,8 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+const exitNoTests = 5
+
 type config struct {
 	WorkingDir string                          `toml:"working-dir"`
 	TestPaths  []string                        `toml:"test-paths"`
@@ -250,6 +252,10 @@ func (r *Runner) execute(ctx opctx.Ctx, request testframework.RunRequest, result
 		return err
 	}
 
+	if err := pythonenv.Freeze(ctx, python, filepath.Join(request.WorkDir, "python-environment.txt")); err != nil {
+		return fmt.Errorf("record pytest runtime:\n%w", err)
+	}
+
 	args, err := r.arguments(ctx.FS(), workingDir, local, filepath.Join(privateDir, "source"), request)
 	if err != nil {
 		return err
@@ -300,6 +306,10 @@ func runAndReport(
 		var exit interface{ ExitCode() int }
 		if errors.As(err, &exit) && exit.ExitCode() == 1 {
 			native = testframework.Failed
+		}
+
+		if errors.As(err, &exit) && exit.ExitCode() == exitNoTests {
+			err = errors.Join(err, testframework.ErrNoTests)
 		}
 	}
 
