@@ -1,0 +1,4 @@
+summary: Intentionally skipped case
+result: custom
+test: |
+  printf '%s\n' '- name: /' '  result: skip' >"$TMT_TEST_DATA/results.yaml"

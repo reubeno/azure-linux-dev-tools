@@ -1,0 +1,10 @@
+summary: Installed candidate identity and behavior
+test: |
+  set -eu
+  rpm -q azldev-tmt-probe
+  rpm -V azldev-tmt-probe
+  directory="$(mktemp -d)"
+  trap 'rm -rf "${directory}"' EXIT
+  printf '%s\n' "candidate round trip" >"${directory}/input"
+  azldev-tmt-probe "${directory}/input" "${directory}/output"
+  grep -qx "CANDIDATE ROUND TRIP" "${directory}/output"

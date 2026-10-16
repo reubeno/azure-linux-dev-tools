@@ -1,0 +1,6 @@
+previewFeatures:
+  - preview-distro-version
+os:
+  additionalFiles:
+    - source: qemu-reporting.cfg
+      destination: /etc/cloud/cloud.cfg.d/99-qemu-reporting.cfg

@@ -1,0 +1,6 @@
+summary: Verify selected candidate bytes on a target
+discover:
+  how: fmf
+  test: ^/tests/candidate$
+execute:
+  how: tmt

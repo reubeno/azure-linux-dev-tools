@@ -1,0 +1,3 @@
+summary: Bounded cancellation fixture
+test: echo AZLDEV_NATIVE_CANCEL_READY; sleep 600
+duration: 11m

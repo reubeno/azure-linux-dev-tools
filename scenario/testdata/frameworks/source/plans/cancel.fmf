@@ -1,0 +1,6 @@
+summary: Keep a native case active for cancellation
+discover:
+  how: fmf
+  test: ^/tests/cancel$
+execute:
+  how: tmt

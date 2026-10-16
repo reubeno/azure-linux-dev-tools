@@ -1,0 +1,20 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+import hashlib
+import json
+import os
+from pathlib import Path
+
+def test_materialized_inputs():
+    document = json.loads(Path(os.environ["AZLDEV_TEST_INPUTS"]).read_text())
+    inputs = document["inputs"]
+    artifacts = inputs.get("packages", [])
+    if inputs.get("image"):
+        artifacts.append(inputs["image"])
+    assert artifacts
+    for artifact in artifacts:
+        path = Path(artifact["path"])
+        assert artifact["originalPath"] != str(path)
+        assert artifact["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert path.stat().st_mode & 0o222 == 0
+        assert artifact["source"] == os.environ["EXPECTED_ARTIFACT_SOURCE"]

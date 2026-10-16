@@ -16,6 +16,7 @@ if it uses memfs and mocks.
 | Unit | `mage unit` | (none) | Fast, isolated, in-memory |
 | Scenario | `mage scenario` | `//go:build scenario` | End-to-end CLI with snapshot validation |
 | E2E | `mage e2e` | `//go:build e2e` | Heavy end-to-end tests against real upstream repos (network + large clones); not run by `mage scenario` / `mage all` |
+| Native frameworks | `mage e2e -target=frameworks` | `//go:build e2e && linux` | Real TMT/LISA/pytest contracts in isolated containers; requires Docker/network/KVM and runs in a dedicated CI job |
 
 ### Sub-Tiers Within `mage unit`
 
@@ -47,6 +48,13 @@ Run via `mage e2e` — they are intentionally excluded from `mage scenario`,
 repositories (e.g. `microsoft/azurelinux`) and can be expensive. They reuse
 the same scenario container framework (`cmdtest`/`containertest`) but skip the
 in-memory project synthesis layer.
+
+Use `mage e2e -target=frameworks` for native contracts, or
+`mage e2e -run='^TestNativeFrameworkContracts$/local'` without KVM.
+They are included in plain `mage e2e`, but not `mage all`; see
+`docs/developer/how-to/testing.md` for fixtures and supported coverage.
+Keep runtime scratch outside the checkout and retain only reports in
+`out/`, so concurrent Go tooling never scans transient Python environments.
 
 ## Assessing Test Quality (Mutation Testing)
 

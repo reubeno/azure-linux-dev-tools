@@ -1,0 +1,2 @@
+summary: Intentionally failing case
+test: exit 1

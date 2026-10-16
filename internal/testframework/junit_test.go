@@ -73,6 +73,7 @@ func TestJUnitRejectsMalformedOrContradictoryReports(t *testing.T) {
 		`<testsuite><testcase name="test" time="Inf"/></testsuite>`,
 		`<testsuite><testcase name="test" time="-1"/></testsuite>`,
 		`<testsuite><testcase name="test" time="99999999999999999"/></testsuite>`,
+		`<testsuite><testcase name="test" time="9223372036.854776"/></testsuite>`,
 	} {
 		ctx := testctx.NewCtx()
 		require.NoError(t, fileutils.WriteFile(ctx.FS(), "/native.xml", []byte(data), fileperms.PrivateFile))
@@ -151,4 +152,22 @@ func TestJUnitRetainsIdentityAndAcceptsZeroDuration(t *testing.T) {
 	require.NoError(t, fileutils.WriteFile(ctx.FS(), "/report", []byte(data+"<"), fileperms.PrivateFile))
 	_, err = testframework.ReadJUnit(ctx.FS(), "/report")
 	require.ErrorContains(t, err, "trailing")
+}
+
+func TestSkippedNativeStatusMustAgreeWithEveryCase(t *testing.T) {
+	for _, status := range []testframework.Status{
+		testframework.Passed, testframework.Failed, testframework.Errored, testframework.Skipped,
+	} {
+		for _, nativeErr := range []error{nil, errors.New("native failure")} {
+			actual, err := testframework.ResolveOutcome(testframework.Skipped, nativeErr,
+				[]testframework.CaseResult{{Name: "case", Status: status}})
+			if status == testframework.Skipped && nativeErr == nil {
+				require.NoError(t, err)
+				assert.Equal(t, testframework.Skipped, actual)
+			} else {
+				require.Error(t, err)
+				assert.Equal(t, testframework.Errored, actual)
+			}
+		}
+	}
 }

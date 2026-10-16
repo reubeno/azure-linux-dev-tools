@@ -9,16 +9,39 @@ package containertest
 import (
 	"testing"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestSystemdHostKeepsPrivateNamespaces(t *testing.T) {
+	collateral := NewContainerTestCollateral(t).WithSystemd()
+	config := &container.HostConfig{}
+	hostConfigModifier(collateral, nil)(config)
+	assert.True(t, config.Privileged)
+	assert.Equal(t, container.CgroupnsMode("private"), config.CgroupnsMode)
+	assert.Contains(t, config.Tmpfs, "/run")
+	assert.Empty(t, config.NetworkMode, "never share the host network")
+	assert.Nil(t, config.Init, "systemd itself must be PID 1")
+}
 
 func TestContainerImageOptions(t *testing.T) {
 	t.Parallel()
 
 	collateral := NewContainerTestCollateral(t).
-		WithDockerfile("Dockerfile.image-builder")
+		WithDockerfile("Dockerfile.image-builder").
+		WithTmpfs("/workdir/build", "rw,exec,mode=1777").
+		WithInit().
+		WithDevice("/dev/kvm", "/dev/kvm", "rwm").
+		WithSupplementalGroup("123")
 
 	assert.Equal(t, "Dockerfile.image-builder", collateral.dockerfile)
+	assert.Equal(t, map[string]string{"/workdir/build": "rw,exec,mode=1777"}, collateral.tmpfs)
+	assert.True(t, collateral.init)
+	assert.Len(t, collateral.devices, 1)
+	assert.Equal(t, "/dev/kvm", collateral.devices[0].PathOnHost)
+	assert.Equal(t, "/dev/kvm", collateral.devices[0].PathInContainer)
+	assert.Equal(t, "rwm", collateral.devices[0].CgroupPermissions)
+	assert.Equal(t, []string{"123"}, collateral.groupAdd)
 	assert.Equal(t, "latest-image-builder", containerImageTag(collateral.dockerfile))
 	assert.Equal(t, "latest", containerImageTag(defaultDockerfile))
 }
@@ -32,6 +55,15 @@ func TestContainerImageOptionsRejectInvalidValues(t *testing.T) {
 		},
 		"nested Dockerfile": func() {
 			NewContainerTestCollateral(t).WithDockerfile("../Dockerfile")
+		},
+		"relative tmpfs": func() {
+			NewContainerTestCollateral(t).WithTmpfs("workdir", "rw")
+		},
+		"empty device": func() {
+			NewContainerTestCollateral(t).WithDevice("", "/dev/kvm", "rwm")
+		},
+		"empty group": func() {
+			NewContainerTestCollateral(t).WithSupplementalGroup("")
 		},
 	}
 

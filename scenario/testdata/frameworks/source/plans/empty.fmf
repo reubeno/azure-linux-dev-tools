@@ -1,0 +1,6 @@
+summary: Verify that discovering no tests is not success
+discover:
+  how: fmf
+  test: ^/tests/does-not-exist$
+execute:
+  how: tmt

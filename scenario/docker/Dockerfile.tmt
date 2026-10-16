@@ -1,0 +1,80 @@
+FROM mcr.microsoft.com/azurelinux/core:4@sha256:9c68c83b4b6cd6c24b40fc107074885f70847c43dcf36b5b2f58624f9b993104
+SHELL ["/bin/bash", "-c"]
+
+ARG UID
+ARG GID
+ARG WORK_DIR
+
+ENV UID=${UID}
+ENV GID=${GID}
+
+LABEL name="azldev_tmt_virtual_testing"
+
+RUN tdnf -y install \
+    acl \
+    ca-certificates \
+    edk2-ovmf \
+    gcc \
+    git \
+    libvirt \
+    libvirt-client \
+    libvirt-daemon \
+    libvirt-daemon-config-network \
+    libvirt-daemon-driver-qemu \
+    libvirt-devel \
+    openssh-server \
+    podman \
+    procps-ng \
+    pkgconf-pkg-config \
+    python3 \
+    python3-devel \
+    python3-pip \
+    qemu-img \
+    qemu-kvm \
+    rpm \
+    rpm-build \
+    rsync \
+    shadow-utils \
+    sudo \
+    systemd \
+    util-linux \
+    xorriso \
+    && tdnf clean all
+
+RUN ln -s /usr/sbin/xorrisofs /usr/local/bin/genisoimage
+
+COPY tmt-probe.spec tmt-probe.sh /tmp/tmt-probe/
+RUN rpmbuild -bb \
+    --define "_topdir /tmp/rpmbuild" \
+    --define "_sourcedir /tmp/tmt-probe" \
+    /tmp/tmt-probe/tmt-probe.spec \
+    && install -D -m 0644 \
+    /tmp/rpmbuild/RPMS/noarch/azldev-tmt-probe-*.noarch.rpm \
+    /opt/azldev-tmt-fixtures/candidate.rpm \
+    && rm -rf /tmp/rpmbuild /tmp/tmt-probe
+
+RUN groupadd -f -g "${GID}" testgroup && \
+    useradd -u "${UID}" -g "${GID}" -m testuser && \
+    mkdir -p /etc/sudoers.d && \
+    echo "testuser ALL=(ALL) NOPASSWD: ALL" >/etc/sudoers.d/testuser
+
+# Only this disposable host uses permissive local libvirt access.
+RUN printf '%s\n' 'auth_unix_rw = "none"' 'unix_sock_rw_perms = "0777"' \
+    'log_outputs = "1:file:/var/log/libvirt/libvirtd.log"' >>/etc/libvirt/libvirtd.conf && \
+    printf '%s\n' 'user = "testuser"' 'group = "testgroup"' 'security_driver = "none"' >>/etc/libvirt/qemu.conf && \
+    mkdir -p /var/log/libvirt /etc/containers && \
+    printf '%s\n' '[engine]' 'cgroup_manager = "cgroupfs"' '[network]' \
+    'firewall_driver = "iptables"' >/etc/containers/containers.conf && \
+    printf '%s\n' '[storage]' 'driver = "vfs"' >/etc/containers/storage.conf && \
+    systemctl enable libvirtd virtlogd virtlockd && \
+    systemctl mask systemd-networkd-wait-online.service && \
+    ssh-keygen -A
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY run-tmt-e2e.sh /usr/local/bin/run-tmt-e2e
+COPY start-systemd-test-host.sh /usr/local/bin/start-systemd-test-host
+RUN chmod 0755 /usr/local/bin/run-tmt-e2e /usr/local/bin/start-systemd-test-host
+
+USER testuser:testgroup
+WORKDIR ${WORK_DIR}
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

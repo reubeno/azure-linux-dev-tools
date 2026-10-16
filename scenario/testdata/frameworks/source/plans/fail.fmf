@@ -1,0 +1,6 @@
+summary: Verify native assertion failure reporting
+discover:
+  how: fmf
+  test: ^/tests/fail$
+execute:
+  how: tmt

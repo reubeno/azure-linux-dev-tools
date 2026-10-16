@@ -56,8 +56,9 @@ container.
 
 The checkout and KIWI work tree live entirely in the disposable builder
 container. Only the resolved source revision and checked qcow2 are written to a
-host artifact mount. The privileged container is restricted to this
-image-construction test; ordinary scenario and e2e containers remain unchanged.
+host artifact mount. This dedicated builder does not change the privileges of
+ordinary scenario containers. Native framework tests use their own
+purpose-specific containers.
 
 ### External test-framework contracts
 
@@ -91,17 +92,62 @@ the returned results and reports. Native adapters never choose whether to build
 or download an input.
 
 Keep fast CLI/configuration scenarios separate from privileged VM integration.
-Upstream work in [microsoft/azure-linux-dev-tools#381](https://github.com/microsoft/azure-linux-dev-tools/pull/381)
-and [microsoft/azure-linux-dev-tools#382](https://github.com/microsoft/azure-linux-dev-tools/pull/382)
-provides image-building and virtual TMT fixtures. Reuse that infrastructure rather
-than creating a second container harness. The TMT fixture is quarantined in its
-original branch; a green default E2E suite does not mean that fixture ran.
+The committed native harness builds on
+[microsoft/azure-linux-dev-tools#381](https://github.com/microsoft/azure-linux-dev-tools/pull/381)
+and [microsoft/azure-linux-dev-tools#382](https://github.com/microsoft/azure-linux-dev-tools/pull/382).
+It reuses the scenario container plumbing, rather than a second harness.
+
+| Command | Coverage |
+| --- | --- |
+| `mage e2e` | All E2E tests, including native framework contracts; requires Linux/Docker/network/KVM |
+| `mage e2e -target=component` | Upstream component update/render workflows |
+| `mage e2e -target=image` | Build `1p-vm-base-gen2` from current Azure Linux `4.0` and record the resolved commit |
+| `mage e2e -target=frameworks` | Complete native TMT/LISA/pytest contract suite |
+| `mage e2e -run='^TestNativeFrameworkContracts$/local'` | TMT host/container/SSH and pytest; no KVM required |
+| `mage e2e -run='^TestNativeFrameworkContracts$/virtual/lisa'` | Focused LISA contracts; use `/virtual/tmt` for TMT |
+
+The `-target` selector follows the image-build PR's single `mage e2e` entry point;
+`-run` is an alternative for an exact Go test/subtest expression, not combined
+with a named target. Native contracts use the ordinary `e2e` tag and run in the
+dedicated **Native framework contracts** CI job on pull requests. The component
+and image CI jobs select their own targets to avoid running the same tests twice.
+They are not part of `mage all` or `mage scenario`. There is no quarantine switch.
+
+Fixtures live in `scenario/testdata/frameworks/`. The local family exercises
+component and image commands with explicit, reused local, and HTTP-published
+inputs; pytest skip/assertion/setup-error/empty results; main's prepared-venv
+location; TMT same-version candidate replacement; managed-container cancellation;
+and a separate caller-owned SSH target that survives cancellation. The VM probe
+checks firewall/readiness, SSH policy, package identity and executable behavior.
+LISA runs component, image, and mixed pass/fail/skip cases on a real systemd/libvirt
+host inside a privileged container with private namespaces. It also verifies empty
+selection and a deliberately invalid candidate RPM, which must report a setup
+error rather than a test assertion failure.
+
+The native VM fixture is **x86_64 qcow2**. Other disk formats and architecture
+selection are covered by unit contracts, not claimed as native matrix coverage.
+Artifacts and timing observations are retained under `out/framework-e2e/` and
+`out/tmt-virtual-e2e/`. Timings are diagnostic, not formal performance budgets.
+
+The image-build E2E follows current upstream, while the framework suite builds
+its regression image from the checked-in Azure Linux revision. Both use the same
+builder container with checkout and work files kept entirely inside it.
+For a shorter local loop, supply absolute `AZL_TMT_IMAGE`, `AZL_TMT_RPM`, and
+`AZL_TMT_IMAGE_REVISION` together. `AZL_LISA_IMAGE` may additionally select an
+already QEMU-compatible image. Without it, the suite uses azldev Image Customizer
+to create a separate compatible copy; it never edits the original image.
+No session-specific paths, private credentials, or unpublished fixture artifacts
+are required.
 
 Runtime pins live in `internal/tmt/requirements.txt`, aligned with the shared-pin
 approach in [microsoft/azure-linux-dev-tools#384](https://github.com/microsoft/azure-linux-dev-tools/pull/384).
 An integration harness must use the binary under review and these constraints,
 not a separately built older implementation. Runtime environments are ephemeral;
 verify `python-environment.txt` instead of depending on private venv paths.
+All three adapters record installed distributions using Python's standard
+metadata API, including prepared environments without pip. The LISA fixture
+revision and pytest version are also checked in; dependency updates must pass
+the native job.
 
 Useful live checks include candidate package identity and behavior, unchanged
 input files, guest cleanup on failure/cancellation, mixed-framework selection,

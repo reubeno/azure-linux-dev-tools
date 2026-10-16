@@ -56,6 +56,22 @@ type containerTestParams struct {
 
 	// Dockerfile selects an alternate scenario container definition.
 	Dockerfile string
+
+	// Tmpfs maps container paths to Docker tmpfs options.
+	Tmpfs map[string]string
+
+	Init bool
+
+	Devices []containerDevice
+
+	SupplementalGroups []string
+	Systemd            bool
+}
+
+type containerDevice struct {
+	hostPath      string
+	containerPath string
+	permissions   string
 }
 
 // NewScenarioTest creates a new test with the specified arguments. It will default to invoking the azldev
@@ -240,6 +256,51 @@ func (cParams *containerTestParams) WithDockerfile(dockerfile string) *container
 	return cParams
 }
 
+// WithTmpfs adds a tmpfs mount to the container.
+func (cParams *containerTestParams) WithTmpfs(destination, options string) *containerTestParams {
+	if cParams.Tmpfs == nil {
+		cParams.Tmpfs = map[string]string{}
+	}
+
+	cParams.Tmpfs[destination] = options
+
+	return cParams
+}
+
+// WithInit enables Docker's minimal init process.
+func (cParams *containerTestParams) WithInit() *containerTestParams {
+	cParams.Init = true
+
+	return cParams
+}
+
+// WithDevice maps a host device into the container.
+func (cParams *containerTestParams) WithDevice(
+	hostPath, containerPath, permissions string,
+) *containerTestParams {
+	cParams.Devices = append(cParams.Devices, containerDevice{
+		hostPath:      hostPath,
+		containerPath: containerPath,
+		permissions:   permissions,
+	})
+
+	return cParams
+}
+
+// WithSupplementalGroup adds a supplemental group to the container process.
+func (cParams *containerTestParams) WithSupplementalGroup(group string) *containerTestParams {
+	cParams.SupplementalGroups = append(cParams.SupplementalGroups, group)
+
+	return cParams
+}
+
+// WithSystemd selects an isolated privileged systemd host for the test command.
+func (cParams *containerTestParams) WithSystemd() *containerTestParams {
+	cParams.Systemd = true
+
+	return cParams
+}
+
 // Run runs the test as configured.
 func (params *localTestParams) Run(t *testing.T) (results testhelpers.TestResults, err error) {
 	t.Helper()
@@ -336,6 +397,26 @@ func (cParams *containerTestParams) Run(t *testing.T) (results testhelpers.TestR
 
 	if cParams.Dockerfile != "" {
 		collateral = collateral.WithDockerfile(cParams.Dockerfile)
+	}
+
+	for destination, options := range cParams.Tmpfs {
+		collateral = collateral.WithTmpfs(destination, options)
+	}
+
+	if cParams.Init {
+		collateral = collateral.WithInit()
+	}
+
+	for _, device := range cParams.Devices {
+		collateral = collateral.WithDevice(device.hostPath, device.containerPath, device.permissions)
+	}
+
+	for _, group := range cParams.SupplementalGroups {
+		collateral = collateral.WithSupplementalGroup(group)
+	}
+
+	if cParams.Systemd {
+		collateral = collateral.WithSystemd()
 	}
 
 	var cmd []string

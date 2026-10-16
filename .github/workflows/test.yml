@@ -73,6 +73,7 @@ jobs:
     strategy:
       matrix:
         host: [ubuntu-latest]
+        target: [component, image]
     runs-on: ${{ matrix.host }}
     permissions:
       contents: read
@@ -97,5 +98,46 @@ jobs:
           sudo aa-disable /usr/sbin/unix_chkpwd
 
       - name: Run tests
+        env:
+          E2E_TARGET: ${{ matrix.target }}
         run: |
-          mage -v e2e
+          mage -v e2e -target="$E2E_TARGET"
+
+  native-framework-tests:
+    name: "Native framework contracts"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Get go tools
+        uses: $/.github/getgotools
+      - name: Prepare dedicated runner virtualization
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          sudo apt-get update
+          sudo apt-get install -y apparmor-utils
+          sudo aa-disable /usr/sbin/unix_chkpwd
+      - name: Run native contracts
+        run: mage -v e2e -target=frameworks
+      - name: Retain native reports and diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-framework-contracts
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            out/framework-e2e/**/*.xml
+            out/framework-e2e/**/*.log
+            out/framework-e2e/**/timings.json
+            out/framework-e2e/**/results.json
+            out/framework-e2e/**/inputs.json
+            out/framework-e2e/**/python-environment.txt
+            out/framework-e2e/**/lisa-revision.txt
+            out/tmt-virtual-e2e/**/artifacts/*

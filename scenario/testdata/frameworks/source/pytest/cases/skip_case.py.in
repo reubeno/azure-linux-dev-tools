@@ -1,0 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+import pytest
+
+def test_expected_skip():
+    pytest.skip("intentionally inapplicable")

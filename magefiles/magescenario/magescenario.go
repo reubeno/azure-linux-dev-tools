@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,10 +21,7 @@ import (
 
 var ErrScenario = errors.New("scenario test failed")
 
-const (
-	e2eTargetAll   = "all"
-	e2eTargetImage = "image"
-)
+const e2eTargetAll = "all"
 
 // Scenario runs the scenario tests.
 func Scenario() error {
@@ -49,48 +47,15 @@ func ScenarioUpdate() error {
 	return nil
 }
 
-// E2E runs one of: [all, image]. The default is all.
-// These tests are tagged with the `e2e` build tag
-// (separate from `scenario`) so that they do not run as part of `mage scenario`,
-// `mage scenarioUpdate`, or `mage all` — they are intentionally heavier
-// (network access, large clones, full mock pipelines) and meant to be run
-// from CI on a dedicated job.
-func E2E(target *string) error {
+// E2E runs all, component, image, or frameworks tests (default: all).
+// Use -run instead of -target for a focused Go test/subtest expression.
+// These use the 'e2e' tag and do not run as part of 'mage scenario' or 'mage all'.
+func E2E(target, run *string) error {
 	startTime := time.Now()
 
-	selectedTarget := e2eTargetAll
-	if target != nil {
-		selectedTarget = *target
-	}
-
-	options := scenarioGoTestOptions{
-		label: "end-to-end",
-		// Use the dedicated 'e2e' tag so that scenario tests are excluded.
-		buildTag: "e2e",
-		// E2E tests are individually long-running (clone hundreds of MB,
-		// invoke mock thousands of times). A full render against the
-		// upstream repo runs ~45m on default GitHub runners; give it
-		// roughly double for headroom.
-		timeout: "90m",
-		// Limit to './scenario' (not './scenario/...') so the framework's own
-		// internal-package tests — already covered by 'mage scenario' — are
-		// not duplicated here.
-		packagePattern: "./scenario",
-	}
-
-	switch selectedTarget {
-	case e2eTargetAll:
-	case e2eTargetImage:
-		options.label = "image-build end-to-end"
-		options.timeout = "25m"
-		options.testSelector = "^TestAzureLinuxImageBuild$"
-	default:
-		return fmt.Errorf(
-			"%w: unknown end-to-end target %#q; available targets: %q",
-			ErrScenario,
-			selectedTarget,
-			[]string{e2eTargetAll, e2eTargetImage},
-		)
+	options, err := e2eOptions(target, run)
+	if err != nil {
+		return err
 	}
 
 	mageutil.MagePrintf(mageutil.MsgStart, "Starting %s tests...\n", options.label)
@@ -99,13 +64,46 @@ func E2E(target *string) error {
 		return err
 	}
 
-	mageutil.MagePrintf(
-		mageutil.MsgSuccess,
-		"End-to-end tests complete: %v.\n",
-		time.Since(startTime),
-	)
+	mageutil.MagePrintf(mageutil.MsgSuccess, "End-to-end tests complete: %v.\n", time.Since(startTime))
 
 	return nil
+}
+
+func e2eOptions(target, run *string) (scenarioGoTestOptions, error) {
+	selected := e2eTargetAll
+	if target != nil {
+		selected = *target
+	}
+
+	options := scenarioGoTestOptions{label: "end-to-end", buildTag: "e2e", timeout: "90m", packagePattern: "./scenario"}
+
+	switch selected {
+	case e2eTargetAll:
+	case "component":
+		options.label, options.testSelector = "component end-to-end", "^TestAzureLinuxComponent"
+	case "image":
+		options.label, options.testSelector, options.timeout = "image-build end-to-end", "^TestAzureLinuxImageBuild$", "25m"
+	case "frameworks":
+		options.label, options.testSelector = "native framework contracts", "^TestNativeFrameworkContracts$"
+		options.timeout = "60m"
+	default:
+		return options, fmt.Errorf("%w: unknown end-to-end target %#q; available targets: %q",
+			ErrScenario, selected, []string{e2eTargetAll, "component", "image", "frameworks"})
+	}
+
+	if run != nil {
+		if selected != e2eTargetAll || *run == "" {
+			return options, fmt.Errorf("%w: use a nonempty '-run' expression instead of a named '-target'", ErrScenario)
+		}
+
+		if _, err := regexp.Compile(*run); err != nil {
+			return options, fmt.Errorf("invalid end-to-end '-run' expression:\n%w", err)
+		}
+
+		options.testSelector = *run
+	}
+
+	return options, nil
 }
 
 func mageScenarioCommon(doSnapshotUpdate bool) error {

@@ -1,0 +1,6 @@
+summary: Verify native all-skipped reporting
+discover:
+  how: fmf
+  test: ^/tests/skip$
+execute:
+  how: tmt

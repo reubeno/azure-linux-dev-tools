@@ -1,0 +1,7 @@
+[project]
+work-dir = "work"
+output-dir = "out"
+log-dir = "logs"
+
+[tools.imageCustomizer]
+containerTag = "ghcr.io/microsoft/imagecustomizer:1.6.0"

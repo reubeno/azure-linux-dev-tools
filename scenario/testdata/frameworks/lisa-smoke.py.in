@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+from lisa import Node, TestCaseMetadata, TestSuite, TestSuiteMetadata
+from lisa.util import SkippedException
+
+@TestSuiteMetadata(
+    area="azldev", category="functional", owner="azldev",
+    description="Native azldev artifact contract",
+)
+class AzldevContract(TestSuite):
+    @TestCaseMetadata(description="Verify candidate payload and owner", priority=0)
+    def verify_candidate(self, node: Node) -> None:
+        node.execute(
+            "set -eu; rpm -q azldev-tmt-probe; rpm -V azldev-tmt-probe; "
+            "printf 'candidate round trip\\n' >/tmp/azldev-input; "
+            "azldev-tmt-probe /tmp/azldev-input /tmp/azldev-output; "
+            "grep -qx 'CANDIDATE ROUND TRIP' /tmp/azldev-output",
+            shell=True, sudo=True,
+        ).assert_exit_code()
+
+    @TestCaseMetadata(description="Verify image OS identity", priority=0)
+    def verify_image(self, node: Node) -> None:
+        node.execute(
+            "set -eu; . /etc/os-release; test \"$ID\" = azurelinux; "
+            "test \"$VERSION_ID\" = 4 -o \"$VERSION_ID\" = 4.0",
+            shell=True,
+        ).assert_exit_code()
+
+    @TestCaseMetadata(description="Verify a native assertion failure", priority=0)
+    def expected_failure(self, node: Node) -> None:
+        node.execute("false", shell=True).assert_exit_code()
+
+    @TestCaseMetadata(description="Verify a native skipped case", priority=0)
+    def expected_skip(self) -> None:
+        raise SkippedException("intentionally inapplicable")

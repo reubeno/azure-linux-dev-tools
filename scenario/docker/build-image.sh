@@ -5,6 +5,7 @@ architecture="$1"
 image_name="$2"
 repository="$3"
 branch="$4"
+pinned_revision="${5:-}"
 artifact_directory="${AZL_IMAGE_BUILD_ARTIFACTS:-/artifacts}"
 checkout="$(mktemp -d)"
 output_directory="$checkout/base/out/images/$image_name"
@@ -15,7 +16,16 @@ if [[ -e "$artifact" || -L "$artifact" ]]; then
     exit 1
 fi
 
-git clone --depth=1 --branch "$branch" "$repository" "$checkout"
+# Native framework regression fixtures use a fixed commit; the image-build E2E
+# follows the upstream branch and records the exact commit it exercised.
+if [[ -n "$pinned_revision" ]]; then
+    git -C "$checkout" init --quiet
+    git -C "$checkout" remote add origin "$repository"
+    git -C "$checkout" fetch --depth=1 origin "$pinned_revision"
+    git -C "$checkout" checkout --detach FETCH_HEAD
+else
+    git clone --depth=1 --branch "$branch" "$repository" "$checkout"
+fi
 git -C "$checkout" rev-parse HEAD | tee "$artifact_directory/source-revision"
 
 cd "$checkout"

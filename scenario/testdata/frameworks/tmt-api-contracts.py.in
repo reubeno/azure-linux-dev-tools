@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+"""Check generated compatibility shims against the actual pinned TMT API."""
+import importlib.util
+import sys
+from types import SimpleNamespace
+import tmt.guest as guest
+import tmt.steps.provision.testcloud as testcloud
+
+waiting = guest.default_ssh_master_start_waiting()
+expected_waiting = vars(waiting).copy()
+expected_waiting["tick"] = min(waiting.tick, 1.0)
+guest.default_ssh_master_start_waiting = lambda: waiting
+guest.GuestSsh.pull = lambda self, source=None, destination=None, options=None: (source, destination, options)
+
+spec = importlib.util.spec_from_file_location("azldev_generated_contract", sys.argv[1])
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+assert guest.default_ssh_master_start_waiting() is waiting
+assert vars(waiting) == expected_waiting, "only the SSH readiness tick may change"
+assert "ssh_pwauth: true" not in testcloud.USER_DATA
+assert "ssh_pwauth: false" in testcloud.USER_DATA
+assert any("--add-port=10022/tcp" in command for command in testcloud.TESTCLOUD_WORKAROUNDS)
+assert any("--add-service=ssh" in command for command in testcloud.TESTCLOUD_WORKAROUNDS)
+
+commands = []
+target = SimpleNamespace(user="tester", plan_workdir="/plan", execute=lambda command, **kwargs: commands.append(str(command)))
+assert guest.GuestSsh.pull(target, "/source", "/destination", ["option"]) == ("/source", "/destination", ["option"])
+assert len(commands) == 1 and "sudo" in commands[0] and "chmod" in commands[0] and "/source" in commands[0]
+target.user = "root"
+assert guest.GuestSsh.pull(target) == (None, None, None)
+assert len(commands) == 1, "root pulls must not mutate guest permissions"
+print("Native TMT compatibility API contracts passed")
