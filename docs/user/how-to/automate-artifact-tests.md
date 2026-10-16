@@ -1,6 +1,6 @@
 # Automate artifact tests
 
-Use the same `component test` and `image test` commands in CI as locally.
+Use the same `test run --component` and `test run --image` commands in CI as locally.
 Preserve the command's exit status, save an aggregate JUnit report, and read the
 retained `results.json` for detailed outcomes. Do not infer success from the
 presence of a report, or from the last line printed by a native framework.
@@ -21,7 +21,7 @@ mkdir -p ci-artifacts
 RUN_DIR="$(mktemp -d "$(pwd)/ci-artifacts/image-test.XXXXXX")"
 
 status=0
-azldev -C "$PROJECT" image test candidate \
+azldev -C "$PROJECT" test run --image candidate \
   --test image-bytes --image-path "$IMAGE" --arch x86_64 \
   --work-dir "$RUN_DIR/work" \
   --junit-xml "$RUN_DIR/junit.xml" \
@@ -56,8 +56,8 @@ the test command fails**, and publish `ci-artifacts/`. Do not use `|| true` arou
 the test job as a substitute for an always-run upload step.
 
 Replace the test command for component testing, preserving the same output and
-exit-status handling. Keep the project's normal lock-file mode; the
-[standalone component example](test-component.md) requires `--without-lockfile`.
+exit-status handling. The [standalone component example](test-component.md)
+works in normal mode; no experimental lock-file flag is required.
 
 ## Interpret the exit status
 
@@ -148,6 +148,10 @@ For each input, `inputs.json` records the selected source (`path`, `local`, or
 snapshot path, and SHA-256. The snapshot path normally no longer exists after
 execution; retain the original artifact separately if you need to reproduce the
 run. OCI inputs use `ociImageId` rather than a file path.
+For TMT VMs with configured bootstrap commands, `tmtBootstrapSource` identifies
+the winning `distro-image:NAME`, `project-image:NAME`, or `test:NAME` setting.
+The manifest's effective test configuration retains the resolved commands,
+including an explicit empty list.
 
 Use normalized statuses for CI policy, and native logs for diagnosis.
 `python-environment.txt` records installed runtime distributions and available

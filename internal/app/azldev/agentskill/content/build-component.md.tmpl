@@ -7,8 +7,13 @@ description: {{ printf "%q" .Description }}
 
 **Never install built RPMs on your host** — they target the distro, not your dev
 machine. Use isolated component tests or a chroot with the `azldev-mock` skill.
-`azldev comp build` runs RPM build-time checks; `azldev comp test <name>` runs
+`azldev comp build` runs RPM build-time checks; `azldev test run --component <name>` runs
 the separately configured artifact tests.
+
+Use `azldev test list --component <name>` to inspect associated catalog entries,
+or `azldev test list` for the whole catalog. Listing does not discover native
+cases, prepare frameworks, or acquire artifacts. Test selection skips packaging
+lock validation; no experimental mode is needed to test explicit RPMs.
 
 ## Build
 
@@ -32,7 +37,7 @@ investigate → modify → render → build → test → inspect
 | Modify | edit the component's `.comp.toml` (see the `azldev-overlays` and `azldev-comp-toml` skills) |
 | Verify | `azldev comp render -p <name>` (fast — skips source tarballs) |
 | Build | `azldev comp build -p <name>` |
-| Test | `azldev comp test <name>` (or a mock shell for manual debugging) |
+| Test | `azldev test run --component <name>` (or a mock shell for manual debugging) |
 | Inspect | `azldev comp build -p <name> --preserve-buildenv always`, then a mock shell |
 
 Prefer `comp render` for quick overlay verification; use `comp diff-sources` to see the
@@ -56,7 +61,12 @@ VM inputs may be RAW, qcow2, VHD, or VHDX; conversion never modifies the origina
 Use TMT `context` for fmf adjustments and `cloud-init-runcmds` for guest VM hooks.
 Bootstrap policy must be explicit: there are no automatic guest firewall or
 `fedora` account workarounds. For session-mode testcloud with firewalld enabled,
-configure the named test to permit SSH and TCP 10022 before readiness.
+configure the named image's `test-defaults.tmt` or the test's `tmt` settings to
+permit SSH and TCP 10022 before readiness. Image defaults resolve from the
+distro catalog, then explicit same-name project overrides, then per-test
+overrides, independent of local/LKG artifact origin. Lists replace, and `[]`
+disables inherited commands. An anonymous `--base-image-path` does not inherit
+an image identity; add `--base-image NAME` to explicitly associate the file.
 Native extra arguments are scope-checked and cannot override managed inputs.
 TMT VM plans must have at most one provision phase. All-skipped runs are skipped;
 reporting or cleanup failures remain errors even if tests also failed.

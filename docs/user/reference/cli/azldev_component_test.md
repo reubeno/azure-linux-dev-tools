@@ -47,7 +47,7 @@ azldev component test COMPONENT [flags]
 ```
       --arch string                Target architecture: x86_64 or aarch64 (defaults to host)
       --artifact-source string     Subject artifact source: local (default; reuse or build), lkg, or path
-      --base-image string          Named supporting image (defaults from test/distro configuration)
+      --base-image string          Named supporting image for component tests (defaults from test/distro configuration)
       --base-image-path string     Explicit supporting VM image or OCI archive path
       --base-image-source string   Supporting image source: lkg (default), local, or path
       --execution string           Execution strategy: vm, container, ssh, or host (framework default when omitted)
@@ -58,7 +58,7 @@ azldev component test COMPONENT [flags]
       --plan string                TMT plan override
       --rebuild                    Rebuild the subject locally instead of reusing existing output
       --rebuild-base-image         Build the named supporting image locally
-  -r, --rpm strings                Explicit binary RPM paths/globs; overrides the default complete component build
+  -r, --rpm strings                Explicit binary RPM paths/globs for a component; overrides the complete component build
       --source-dir string          Local test source override instead of cloning (TMT/pytest)
       --ssh-host string            Existing SSH target hostname (--execution ssh)
       --ssh-key string             Private key for the existing SSH target

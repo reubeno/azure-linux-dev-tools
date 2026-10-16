@@ -113,6 +113,23 @@ Building them locally does require a project-local recipe; the tool does not
 implicitly clone another project to obtain one. No image-class or additional
 capability metadata is required by this catalog.
 
+Named images can also supply managed-TMT-VM bootstrap defaults, independently of
+any project-local recipe:
+
+```toml
+[distros.azurelinux.versions.'4.0'.images.vm-base.test-defaults.tmt]
+cloud-init-runcmds = [
+  "firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp",
+]
+```
+
+Add this to the existing image entry alongside its architecture variants.
+`cloud-init-runcmds` is an optional string array; an explicit `[]` disables
+inherited commands. The same named image's explicit project settings override
+these defaults, and per-test settings override both, regardless of whether the
+artifact is local or LKG. See [Image Test Defaults](images.md#image-test-defaults)
+for identity, precedence, anonymous-file behavior, and guest-only scope.
+
 ### Default Component Config
 
 The `default-component-config` field is a powerful inheritance mechanism. Any configuration defined here is inherited by **every component** built against this distro version, unless the component explicitly overrides it. This is how you set a baseline spec source for all components:

@@ -9,7 +9,6 @@ import (
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/artifacts"
-	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/components"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/imagebuilder"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testexecution"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
@@ -76,7 +75,7 @@ logs are retained under the test work directory, with optional aggregated JUnit.
 				}
 			}
 
-			return runComponentTests(env, args[0], *options, fromSpec)
+			return RunComponentTests(env, args[0], *options, fromSpec)
 		}),
 	}
 	testexecution.RegisterFlags(cmd, options, true)
@@ -88,18 +87,13 @@ logs are retained under the test work directory, with optional aggregated JUnit.
 	return cmd
 }
 
-func runComponentTests(env *azldev.Env, name string, options testexecution.Options,
+// RunComponentTests runs a component's selected tests using the shared artifact and framework services.
+func RunComponentTests(env *azldev.Env, name string, options testexecution.Options,
 	fromSpec bool,
 ) ([]testframework.RunResult, error) {
-	filter := &components.ComponentFilter{ComponentNamePatterns: []string{name}}
-
-	set, err := components.NewResolver(env).FindComponents(filter)
+	set, err := testexecution.FindComponent(env, name)
 	if err != nil {
 		return nil, fmt.Errorf("run component tests:\n%w", err)
-	}
-
-	if set.Len() != 1 {
-		return nil, fmt.Errorf("expected exactly one component named %#q, found %d", name, set.Len())
 	}
 
 	component := set.Components()[0]

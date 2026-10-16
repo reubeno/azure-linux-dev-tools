@@ -154,6 +154,12 @@ func (cfg *ProjectConfig) validate(withoutLockfile bool) error {
 // validateImages runs the image-scoped validations: capabilities, architectures,
 // and SKU groups.
 func validateImages(cfg *ProjectConfig) error {
+	for name, image := range cfg.Images {
+		if err := image.TestDefaults.Validate(); err != nil {
+			return fmt.Errorf("image %#q:\n%w", name, err)
+		}
+	}
+
 	if err := validateImageCapabilities(cfg.Images); err != nil {
 		return err
 	}

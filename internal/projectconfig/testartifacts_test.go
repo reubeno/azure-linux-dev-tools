@@ -56,3 +56,47 @@ func TestExecutionDefaultsAreOptionalAndValidated(t *testing.T) {
 	definition.Execution = projectconfig.TestExecutionConfig{BaseImages: map[string]string{"host": "base"}}
 	require.Error(t, definition.Validate("legacy"))
 }
+
+func TestImageTestDefaultsPreserveAbsentAndEmptyLists(t *testing.T) {
+	cfg := projectconfig.NewProjectConfig()
+	content := `
+[distros.azl.versions."4".images.base.architectures]
+x86_64 = [{ format = "qcow2", uri = "https://example.test/base.qcow2" }]
+[distros.azl.versions."4".images.base.test-defaults.tmt]
+cloud-init-runcmds = ["echo distro"]
+[images.base.test-defaults.tmt]
+cloud-init-runcmds = []
+[images.other]
+`
+	require.NoError(t, toml.Unmarshal([]byte(content), &cfg))
+	require.NoError(t, cfg.Validate())
+	require.NotNil(t, cfg.Images["base"].TestDefaults.TMT.CloudInitRuncmds)
+	assert.Empty(t, *cfg.Images["base"].TestDefaults.TMT.CloudInitRuncmds)
+	assert.Nil(t, cfg.Images["other"].TestDefaults)
+	assert.Equal(t, []string{"echo distro"},
+		*cfg.Distros["azl"].Versions["4"].Images["base"].TestDefaults.TMT.CloudInitRuncmds)
+
+	data, err := toml.Marshal(cfg)
+	require.NoError(t, err)
+
+	var roundtrip projectconfig.ProjectConfig
+	require.NoError(t, toml.Unmarshal(data, &roundtrip))
+	require.NotNil(t, roundtrip.Images["base"].TestDefaults.TMT.CloudInitRuncmds)
+	assert.Empty(t, *roundtrip.Images["base"].TestDefaults.TMT.CloudInitRuncmds)
+}
+
+func TestImageTestDefaultsRejectMalformedCommands(t *testing.T) {
+	for _, table := range []string{
+		"images.base.test-defaults.tmt",
+		`distros.azl.versions."4".images.base.test-defaults.tmt`,
+	} {
+		t.Run(table, func(t *testing.T) {
+			cfg := projectconfig.NewProjectConfig()
+			err := toml.Unmarshal([]byte("["+table+"]\ncloud-init-runcmds = [42]\n"), &cfg)
+			require.Error(t, err)
+			err = toml.Unmarshal([]byte("["+table+"]\ncloud-init-runcmds = [\"\\u0000\"]\n"), &cfg)
+			require.NoError(t, err)
+			require.ErrorContains(t, cfg.Validate(), "null byte")
+		})
+	}
+}

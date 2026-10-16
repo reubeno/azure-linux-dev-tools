@@ -11,6 +11,7 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/artifacts"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/imagebuilder"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testexecution"
+	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/qemu"
 	"github.com/spf13/cobra"
 )
@@ -50,49 +51,55 @@ Native reports and structured results are retained in isolated run directories.
   azldev image test container-base --execution container`,
 		Args: cobra.ExactArgs(1),
 		RunE: azldev.RunFuncWithExtraArgs(func(env *azldev.Env, args []string) (interface{}, error) {
-			_, distro, err := env.Distro()
-			if err != nil {
-				return nil, fmt.Errorf("new image test cmd:\n%w", err)
-			}
-
-			image, exists := env.Config().Images[args[0]]
-			if !exists {
-				if _, published := distro.Images[args[0]]; !published {
-					return nil, fmt.Errorf("image %#q is not defined locally or in the published catalog", args[0])
-				}
-
-				image.Name = args[0]
-			}
-
-			arch := options.Arch
-			if arch == "" {
-				arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
-			}
-
-			if !image.SupportsArchitecture(arch) {
-				return nil, fmt.Errorf("image %#q does not support architecture %#q", args[0], arch)
-			}
-
-			associated, err := env.Config().ResolveImageTests(&image)
-			if err != nil {
-				return nil, fmt.Errorf("new image test cmd:\n%w", err)
-			}
-
-			tests, err := testexecution.Select(env.Config(), associated, options.Tests)
-			if err != nil {
-				return nil, fmt.Errorf("new image test cmd:\n%w", err)
-			}
-
-			resolver := &artifacts.Resolver{Env: env, BuildImage: imagebuilder.ArtifactBuilder(env)}
-
-			return testexecution.Run(env, testexecution.Subject{
-				Name: args[0], Kind: "image", Distro: distro,
-				Capabilities: image.Capabilities.EnabledNames(), Properties: image.Properties,
-			}, tests, *options, resolver)
+			return RunImageTests(env, args[0], *options)
 		}),
 		ValidArgsFunction: generateImageNameCompletions,
 	}
 	testexecution.RegisterFlags(cmd, options, false)
 
 	return cmd
+}
+
+// RunImageTests runs an image's selected tests using the shared artifact and framework services.
+func RunImageTests(env *azldev.Env, name string, options testexecution.Options) ([]testframework.RunResult, error) {
+	_, distro, err := env.Distro()
+	if err != nil {
+		return nil, fmt.Errorf("run image tests:\n%w", err)
+	}
+
+	image, err := testexecution.FindImage(env, name)
+	if err != nil {
+		return nil, fmt.Errorf("run image tests:\n%w", err)
+	}
+
+	arch := options.Arch
+	if arch == "" {
+		arch = qemu.GoArchToQEMUArch(runtime.GOARCH)
+	}
+
+	if !image.SupportsArchitecture(arch) {
+		return nil, fmt.Errorf("image %#q does not support architecture %#q", name, arch)
+	}
+
+	associated, err := env.Config().ResolveImageTests(&image)
+	if err != nil {
+		return nil, fmt.Errorf("run image tests:\n%w", err)
+	}
+
+	tests, err := testexecution.Select(env.Config(), associated, options.Tests)
+	if err != nil {
+		return nil, fmt.Errorf("run image tests:\n%w", err)
+	}
+
+	resolver := &artifacts.Resolver{Env: env, BuildImage: imagebuilder.ArtifactBuilder(env)}
+
+	results, err := testexecution.Run(env, testexecution.Subject{
+		Name: name, Kind: "image", Distro: distro,
+		Capabilities: image.Capabilities.EnabledNames(), Properties: image.Properties,
+	}, tests, options, resolver)
+	if err != nil {
+		return results, fmt.Errorf("run image tests:\n%w", err)
+	}
+
+	return results, nil
 }

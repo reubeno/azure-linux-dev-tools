@@ -119,7 +119,10 @@ prepare step. TMT retains control of discovery, execution, reporting, and finish
 | Provision arguments | `provision.extra-args` | string array | Supported native provisioner options, such as `--memory 4096` or `--ssh-option`. |
 | Cloud-init commands | `cloud-init-runcmds` | string array | Additional guest first-boot commands for VM tests, before readiness probing. Not host commands. |
 
-Guest bootstrap policy is explicit and test-scoped. The adapter does not create a
+Guest bootstrap policy is explicit. Named images can supply
+[TMT defaults](images.md#image-test-defaults); the per-test
+`cloud-init-runcmds` field overrides those defaults, including `[]` to disable
+them. The adapter does not create a
 `fedora` account or inject firewall commands. For an Azure Linux image with
 firewalld enabled, a test using testcloud's session connection can declare:
 
@@ -134,12 +137,12 @@ cloud-init-runcmds = [
 These commands run in declaration order, before testcloud starts its readiness
 service. TCP 10022 is needed by `qemu:///session`, not a universal VM requirement.
 Use commands appropriate to the selected image and connection mode; associate
-the named test with the relevant images/components. This field is not an
-image-level default automatically inherited by unrelated tests. A TMT `prepare`
-step cannot fix a port needed to complete provisioning.
+the named test with the relevant images/components. Put shared image policy in
+the image's `test-defaults.tmt` table instead of repeating it in each test.
+A TMT `prepare` step cannot fix a port needed to complete provisioning.
 
 **Migration:** tests that relied on azldev's previous automatic firewall
-workaround must now declare their bootstrap commands. Rules without
+workaround must now declare bootstrap commands on the image or test. Rules without
 `--permanent` last until reboot; they are not removed immediately after readiness.
 
 Native argument lists are scope-checked. They cannot override azldev's artifact,

@@ -85,14 +85,14 @@ func TestBaseOverrideOnlyAppliesToImageConsumers(t *testing.T) {
 		}}},
 	}
 	options := Options{SourceDir: "/tests", Plan: "/plans/all", BaseImagePath: "/base.qcow2"}
-	plans, err := planTests(Subject{Name: "curl", Kind: componentSubject}, tests, options)
+	plans, err := planTests(nil, Subject{Name: "curl", Kind: componentSubject}, tests, options)
 	require.NoError(t, err)
 	require.Len(t, plans, 2)
 	assert.Equal(t, "explicit-base", plans[0].baseName)
 	assert.Empty(t, plans[1].baseName)
 
 	options.Plan = ""
-	_, err = planTests(Subject{Name: "curl", Kind: componentSubject}, tests[1:], options)
+	_, err = planTests(nil, Subject{Name: "curl", Kind: componentSubject}, tests[1:], options)
 	require.ErrorContains(t, err, "base image options")
 }
 
@@ -101,7 +101,7 @@ func TestMixedFrameworkOverridesAreRoutedPerTest(t *testing.T) {
 		{Name: "lisa", Definition: projectconfig.TestDefinition{Type: "lisa", Lisa: map[string]any{"name": "smoke"}}},
 		{Name: "tmt", Definition: projectconfig.TestDefinition{Type: "tmt", Tmt: map[string]any{}}},
 	}
-	plans, err := planTests(Subject{Name: "curl", Kind: componentSubject}, tests, Options{
+	plans, err := planTests(nil, Subject{Name: "curl", Kind: componentSubject}, tests, Options{
 		LisaDir: "/lisa", SourceDir: "/tests", Plan: "/plans/all", BaseImagePath: "/base.qcow2",
 	})
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestMixedFrameworkOverridesAreRoutedPerTest(t *testing.T) {
 	assert.Empty(t, plans[1].execution.FrameworkDir)
 	assert.Equal(t, "/tests", plans[1].execution.SourceDir)
 	assert.Equal(t, "/plans/all", plans[1].execution.Plan)
-	_, err = planTests(Subject{Name: "curl", Kind: componentSubject}, tests[:1], Options{Plan: "/unused"})
+	_, err = planTests(nil, Subject{Name: "curl", Kind: componentSubject}, tests[:1], Options{Plan: "/unused"})
 	require.ErrorContains(t, err, "'--plan' requires")
 }
 
@@ -123,7 +123,7 @@ func TestLegacyCapabilityMetadataIsPreserved(t *testing.T) {
 			Pytest: map[string]any{"working-dir": "/tests", "test-paths": []string{"test_image.py"}},
 		},
 	}
-	plans, err := planTests(Subject{Name: "base", Kind: imageSubject},
+	plans, err := planTests(nil, Subject{Name: "base", Kind: imageSubject},
 		[]projectconfig.ResolvedTest{test}, Options{})
 	require.NoError(t, err)
 	require.Len(t, plans, 1)

@@ -93,16 +93,16 @@ func selectBaseName(subject Subject, test projectconfig.ResolvedTest, requiremen
 	}
 
 	baseName := options.BaseImage
+	if baseName == "" && options.BaseImagePath != "" {
+		return "explicit-base", nil
+	}
+
 	if baseName == "" {
 		baseName = test.Definition.Execution.BaseImages[strategy]
 	}
 
 	if baseName == "" {
 		baseName = subject.Distro.TestBaseImages[strategy]
-	}
-
-	if baseName == "" && options.BaseImagePath != "" {
-		baseName = "explicit-base"
 	}
 
 	if baseName == "" {

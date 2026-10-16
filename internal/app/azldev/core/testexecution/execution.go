@@ -44,15 +44,31 @@ const (
 )
 
 type plannedTest struct {
-	test         projectconfig.ResolvedTest
-	runner       testframework.Runner
-	execution    testframework.ExecutionSpec
-	requirements testframework.Requirements
-	baseName     string
+	test            projectconfig.ResolvedTest
+	runner          testframework.Runner
+	execution       testframework.ExecutionSpec
+	requirements    testframework.Requirements
+	baseName        string
+	bootstrapSource string
 }
 
 // Select expands and deduplicates either explicit selectors or the subject's associated tests.
 func Select(cfg *projectconfig.ProjectConfig, associated []projectconfig.ResolvedTest,
+	selectors []string,
+) ([]projectconfig.ResolvedTest, error) {
+	tests, err := selectTests(cfg, associated, selectors)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(tests) == 0 {
+		return nil, errors.New("no tests selected for this subject")
+	}
+
+	return tests, nil
+}
+
+func selectTests(cfg *projectconfig.ProjectConfig, associated []projectconfig.ResolvedTest,
 	selectors []string,
 ) ([]projectconfig.ResolvedTest, error) {
 	tests := associated
@@ -76,10 +92,6 @@ func Select(cfg *projectconfig.ProjectConfig, associated []projectconfig.Resolve
 		}
 	}
 
-	if len(result) == 0 {
-		return nil, errors.New("no tests selected for this subject")
-	}
-
 	return result, nil
 }
 
@@ -91,7 +103,7 @@ func Run(env *azldev.Env, subject Subject, tests []projectconfig.ResolvedTest, o
 		return nil, fmt.Errorf("run:\n%w", err)
 	}
 
-	plans, err := planTests(subject, tests, options)
+	plans, err := planTests(env.Config(), subject, tests, options)
 	if err != nil {
 		return nil, fmt.Errorf("run:\n%w", err)
 	}
@@ -214,7 +226,9 @@ func containsDir(parent, child string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func planTests(subject Subject, tests []projectconfig.ResolvedTest, options Options) ([]plannedTest, error) {
+func planTests(cfg *projectconfig.ProjectConfig, subject Subject, tests []projectconfig.ResolvedTest,
+	options Options,
+) ([]plannedTest, error) {
 	if err := options.subjectSelection(subject.Kind).Validate(); err != nil {
 		return nil, fmt.Errorf("plan tests:\n%w", err)
 	}
@@ -238,6 +252,10 @@ func planTests(subject Subject, tests []projectconfig.ResolvedTest, options Opti
 		plan, err := planOne(subject, test, options)
 		if err != nil {
 			return nil, fmt.Errorf("test %#q:\n%w", test.Name, err)
+		}
+
+		if err := applyImageDefaults(cfg, subject, &plan, options); err != nil {
+			return nil, fmt.Errorf("test %#q image defaults:\n%w", test.Name, err)
 		}
 
 		plans = append(plans, plan)
@@ -465,12 +483,13 @@ func prepareRequest(env *azldev.Env, subject Subject, plan plannedTest, inputs t
 	}
 
 	data, err := json.MarshalIndent(struct {
-		Subject   string                      `json:"subject"`
-		Kind      string                      `json:"kind"`
-		Inputs    testInputs                  `json:"inputs"`
-		Test      projectconfig.ResolvedTest  `json:"test"`
-		Execution testframework.ExecutionSpec `json:"execution"`
-	}{subject.Name, subject.Kind, inputs, plan.test, plan.execution}, "", "  ")
+		Subject            string                      `json:"subject"`
+		Kind               string                      `json:"kind"`
+		Inputs             testInputs                  `json:"inputs"`
+		Test               projectconfig.ResolvedTest  `json:"test"`
+		Execution          testframework.ExecutionSpec `json:"execution"`
+		TMTBootstrapSource string                      `json:"tmtBootstrapSource,omitempty"`
+	}{subject.Name, subject.Kind, inputs, plan.test, plan.execution, plan.bootstrapSource}, "", "  ")
 	if err != nil {
 		return request, fmt.Errorf("prepare request:\n%w", err)
 	}

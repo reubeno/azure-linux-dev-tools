@@ -30,6 +30,7 @@ func TestInstantiateApp(t *testing.T) {
 				"package",
 				"project",
 				"repo",
+				"test",
 				"version",
 			},
 		)

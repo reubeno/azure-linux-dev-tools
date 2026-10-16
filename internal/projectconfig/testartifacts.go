@@ -28,7 +28,33 @@ func (c TestExecutionConfig) Validate() error {
 
 // PublishedImage describes consumable images, not how to build them.
 type PublishedImage struct {
-	Architectures map[string][]PublishedImageArtifact `toml:"architectures" json:"architectures" jsonschema:"required,title=Architecture variants,description=Image artifacts by target architecture"`
+	Architectures map[string][]PublishedImageArtifact `toml:"architectures"           json:"architectures"          jsonschema:"required,title=Architecture variants,description=Image artifacts by target architecture"`
+	TestDefaults  *ImageTestDefaults                  `toml:"test-defaults,omitempty" json:"testDefaults,omitempty" jsonschema:"title=Test defaults,description=Defaults for this logical image across local and published artifact origins"`
+}
+
+// ImageTestDefaults describes test setup for a named image, not how its artifacts are acquired.
+type ImageTestDefaults struct {
+	TMT TMTImageTestDefaults `toml:"tmt,omitempty" json:"tmt,omitempty" jsonschema:"title=TMT defaults,description=Defaults for managed TMT VM tests"`
+}
+
+// TMTImageTestDefaults preserves the distinction between absent and explicitly empty command lists.
+type TMTImageTestDefaults struct {
+	CloudInitRuncmds *[]string `toml:"cloud-init-runcmds,omitempty" json:"cloudInitRuncmds,omitempty" jsonschema:"title=Cloud-init commands,description=Guest first-boot commands for TMT VMs; an explicit empty array disables inherited commands"`
+}
+
+// Validate checks commands without interpreting their shell syntax.
+func (d *ImageTestDefaults) Validate() error {
+	if d == nil || d.TMT.CloudInitRuncmds == nil {
+		return nil
+	}
+
+	for index, command := range *d.TMT.CloudInitRuncmds {
+		if strings.ContainsRune(command, 0) {
+			return fmt.Errorf("'test-defaults.tmt.cloud-init-runcmds' item %d contains a null byte", index)
+		}
+	}
+
+	return nil
 }
 
 type PublishedImageArtifact struct {
@@ -130,6 +156,10 @@ func (v DistroVersionDefinition) validateTestArtifacts() error {
 }
 
 func (image PublishedImage) validate(name string) error {
+	if err := image.TestDefaults.Validate(); err != nil {
+		return fmt.Errorf("published image %#q:\n%w", name, err)
+	}
+
 	if err := validateArtifactName(name); err != nil {
 		return err
 	}

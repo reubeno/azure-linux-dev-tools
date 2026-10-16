@@ -124,6 +124,12 @@ func (f ConfigFile) Validate() error {
 		return err
 	}
 
+	for name, image := range f.Images {
+		if err := image.TestDefaults.Validate(); err != nil {
+			return fmt.Errorf("image %#q:\n%w", name, err)
+		}
+	}
+
 	return nil
 }
 

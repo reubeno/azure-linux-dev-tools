@@ -59,7 +59,7 @@ func (o Options) baseSelection() artifacts.Selection {
 		result.Paths = []string{o.BaseImagePath}
 		// The default LKG policy must not override an explicit path.
 		if result.Source == "" {
-			result.Source = "path"
+			result.Source = artifacts.SourcePath
 		}
 	} else if result.Source == "" {
 		if result.Rebuild {
@@ -105,14 +105,7 @@ func RegisterFlags(cmd *cobra.Command, options *Options, component bool) {
 	flags.IntVar(&options.SSHPort, "ssh-port", 0, "Existing SSH target port (defaults to 22)")
 
 	if component {
-		flags.StringSliceVarP(&options.RPMPaths, "rpm", "r", nil,
-			"Explicit binary RPM paths/globs; overrides the default complete component build")
-		flags.StringVar(&options.BaseImage, "base-image", "",
-			"Named supporting image (defaults from test/distro configuration)")
-		flags.StringVar(&options.BaseImageSource, "base-image-source", "",
-			"Supporting image source: lkg (default), local, or path")
-		flags.StringVar(&options.BaseImagePath, "base-image-path", "", "Explicit supporting VM image or OCI archive path")
-		flags.BoolVar(&options.RebuildBaseImage, "rebuild-base-image", false, "Build the named supporting image locally")
+		registerComponentFlags(cmd, options)
 		flags.StringVarP(&options.BaseImagePath, "image-path", "i", "", "Alias for --base-image-path")
 		_ = flags.MarkDeprecated("image-path", "use --base-image-path")
 	} else {
@@ -129,4 +122,25 @@ func RegisterFlags(cmd *cobra.Command, options *Options, component bool) {
 	for _, name := range []string{"work-dir", "source-dir", "lisa-dir"} {
 		_ = cmd.MarkFlagDirname(name)
 	}
+}
+
+// RegisterRunFlags exposes both subject kinds without the legacy component image-path alias.
+func RegisterRunFlags(cmd *cobra.Command, options *Options) {
+	RegisterFlags(cmd, options, false)
+	registerComponentFlags(cmd, options)
+}
+
+func registerComponentFlags(cmd *cobra.Command, options *Options) {
+	flags := cmd.Flags()
+	flags.StringSliceVarP(&options.RPMPaths, "rpm", "r", nil,
+		"Explicit binary RPM paths/globs for a component; overrides the complete component build")
+	flags.StringVar(&options.BaseImage, "base-image", "",
+		"Named supporting image for component tests (defaults from test/distro configuration)")
+	flags.StringVar(&options.BaseImageSource, "base-image-source", "",
+		"Supporting image source: lkg (default), local, or path")
+	flags.StringVar(&options.BaseImagePath, "base-image-path", "", "Explicit supporting VM image or OCI archive path")
+	flags.BoolVar(&options.RebuildBaseImage, "rebuild-base-image", false, "Build the named supporting image locally")
+
+	_ = cmd.MarkFlagFilename("rpm")
+	_ = cmd.MarkFlagFilename("base-image-path")
 }

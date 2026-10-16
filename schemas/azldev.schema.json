@@ -774,6 +774,11 @@
           "title": "Tests",
           "description": "Test configuration for this image"
         },
+        "test-defaults": {
+          "$ref": "#/$defs/ImageTestDefaults",
+          "title": "Test defaults",
+          "description": "Defaults for testing this named image or using it as a component test base"
+        },
         "publish": {
           "$ref": "#/$defs/ImagePublishConfig",
           "title": "Publish settings",
@@ -844,6 +849,17 @@
           "type": "array",
           "title": "Channels",
           "description": "List of publish channels for this image"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ImageTestDefaults": {
+      "properties": {
+        "tmt": {
+          "$ref": "#/$defs/TMTImageTestDefaults",
+          "title": "TMT defaults",
+          "description": "Defaults for managed TMT VM tests"
         }
       },
       "additionalProperties": false,
@@ -1106,6 +1122,11 @@
           "type": "object",
           "title": "Architecture variants",
           "description": "Image artifacts by target architecture"
+        },
+        "test-defaults": {
+          "$ref": "#/$defs/ImageTestDefaults",
+          "title": "Test defaults",
+          "description": "Defaults for this logical image across local and published artifact origins"
         }
       },
       "additionalProperties": false,
@@ -1560,6 +1581,20 @@
         "name",
         "subpath"
       ]
+    },
+    "TMTImageTestDefaults": {
+      "properties": {
+        "cloud-init-runcmds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "title": "Cloud-init commands",
+          "description": "Guest first-boot commands for TMT VMs; an explicit empty array disables inherited commands"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "TestDefinition": {
       "allOf": [

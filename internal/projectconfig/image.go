@@ -78,6 +78,9 @@ type ImageConfig struct {
 	// apply to it.
 	Tests *ImageTestsConfig `toml:"tests,omitempty" json:"tests,omitempty" jsonschema:"title=Tests,description=Test configuration for this image"`
 
+	// TestDefaults overrides distro image defaults for this logical image, independent of artifact origin.
+	TestDefaults *ImageTestDefaults `toml:"test-defaults,omitempty" json:"testDefaults,omitempty" jsonschema:"title=Test defaults,description=Defaults for testing this named image or using it as a component test base"`
+
 	// Publish holds the publish settings for this image.
 	Publish ImagePublishConfig `toml:"publish,omitempty" json:"publish,omitempty" jsonschema:"title=Publish settings,description=Publishing settings for this image"`
 
@@ -283,9 +286,20 @@ const (
 
 // Mutates the image config, updating it with overrides present in other.
 func (i *ImageConfig) MergeUpdatesFrom(other *ImageConfig) error {
-	err := mergo.Merge(i, other, mergo.WithOverride, mergo.WithAppendSlice)
+	withoutDefaults := *other
+	withoutDefaults.TestDefaults = nil
+
+	err := mergo.Merge(i, &withoutDefaults, mergo.WithOverride, mergo.WithAppendSlice)
 	if err != nil {
 		return fmt.Errorf("failed to merge image config:\n%w", err)
+	}
+
+	if other.TestDefaults != nil {
+		if i.TestDefaults == nil {
+			i.TestDefaults = deep.MustCopy(other.TestDefaults)
+		} else if other.TestDefaults.TMT.CloudInitRuncmds != nil {
+			i.TestDefaults.TMT.CloudInitRuncmds = deep.MustCopy(other.TestDefaults.TMT.CloudInitRuncmds)
+		}
 	}
 
 	return nil
@@ -304,6 +318,7 @@ func (i *ImageConfig) WithAbsolutePaths(referenceDir string) *ImageConfig {
 		Definition:       deep.MustCopy(i.Definition),
 		Capabilities:     deep.MustCopy(i.Capabilities),
 		Tests:            deep.MustCopy(i.Tests),
+		TestDefaults:     deep.MustCopy(i.TestDefaults),
 		Publish:          deep.MustCopy(i.Publish),
 		Architectures:    deep.MustCopy(i.Architectures),
 		Properties:       deep.MustCopy(i.Properties),

@@ -12,6 +12,7 @@ The `[images]` section defines system images (VMs, containers, etc.) that azldev
 | Capabilities | `capabilities` | [ImageCapabilities](#image-capabilities) | No | Describes features supported by this image |
 | Properties | `properties` | string-to-string table | No | Extensible metadata describing this image |
 | Tests | `tests` | [ImageTests](#image-tests) | No | Test configuration for this image |
+| Test defaults | `test-defaults` | [ImageTestDefaults](#image-test-defaults) | No | Image-specific test setup; overrides the selected distro's defaults for the same named image |
 | Publish | `publish` | [ImagePublish](#image-publish) | No | Publishing settings for this image |
 
 The current supported architectures are `x86_64` and `aarch64`. `architectures` is
@@ -86,6 +87,48 @@ tests = [{ group = "multi-sku-tests", sku-groups = ["multi-sku-amd64", "multi-sk
 > them, so fanning a normal test across a SKU group only yields skips on
 > non-matching SKUs. SKU mapping is meaningful only for the special case of
 > multi-SKU performance tests. See [SKU Groups](tests.md#sku-groups).
+
+## Image Test Defaults
+
+The image name is a logical identity within the selected distro/version, not a
+choice of artifact origin. A project image and a published catalog entry with
+the same name describe that same logical image. Use a different name for an
+unrelated image.
+
+For managed TMT VMs, defaults resolve in this order:
+
+1. `[distros.<distro>.versions.<version>.images.<name>.test-defaults.tmt]`
+2. `[images.<name>.test-defaults.tmt]`
+3. `[tests.<test>.tmt]`
+
+Each explicitly configured command list replaces the preceding list; lists are
+never concatenated. An omitted field inherits, while `[]` clears it. A project
+override applies to local **and** LKG runs of that named image. It does not change
+where artifacts are acquired or introduce fallback between local and LKG.
+
+| TOML key under `test-defaults.tmt` | Type | Required | Description |
+|------------------------------------|------|----------|-------------|
+| `cloud-init-runcmds` | string array | No | Commands run inside a managed TMT guest at first boot, before readiness checks |
+
+For an image using firewalld and testcloud's session connection:
+
+```toml
+[images.vm-base.test-defaults.tmt]
+cloud-init-runcmds = [
+  "firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp",
+]
+```
+
+This metadata needs no local build recipe. It applies to both
+`azldev test run --image vm-base` and component tests using `--base-image vm-base`.
+It does not run for LISA, pytest, or TMT host/container/SSH execution, and it does
+not modify the original image file.
+
+A component's explicit `--base-image-path` is anonymous unless accompanied by
+`--base-image NAME`. Test/distro base-image mappings do not supply an implicit
+identity for an arbitrary file. An explicitly named image subject
+(`--image NAME --image-path FILE`) uses that name's defaults.
+The existing per-test `tmt.cloud-init-runcmds` remains usable for anonymous files.
 
 ## Image Publish
 
