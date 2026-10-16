@@ -83,6 +83,12 @@ so the plan's hardware requirements can be exported and preserved. Containers
 consume an OCI registry image or a local OCI archive. Unsupported framework
 and execution combinations fail explicitly before framework setup.
 
+For VM images that need first-boot accommodations, configure the named test's
+[`tmt.cloud-init-runcmds`](../reference/config/tests.md#tmt-fields).
+There are no implicit azldev firewall or `fedora` account workarounds. In
+particular, testcloud's session-mode HTTP readiness listener needs TCP 10022
+reachable before provisioning can finish.
+
 ## Override test sources
 
 `--source-dir` runs TMT or pytest from a local test tree; `--lisa-dir` selects a
@@ -135,6 +141,8 @@ derived from `execute/results.yaml`, not a synthetic single-case success.
 The plan's native reporting plugins remain intact. `tmt-output.log` retains
 combined output. Every adapter records its installed runtime distributions in
 `python-environment.txt` before removing the private environment.
+Source-installed distributions also record their direct-source metadata, including
+the resolved Git commit. `tmt-requirements.txt` retains TMT's exact input constraints.
 All three adapters populate normalized per-case statuses in `results.json`,
 retaining `nativeStatus`, case names, durations, and available diagnostic messages.
 Native JUnit remains available for LISA and pytest. Missing or contradictory
@@ -146,6 +154,12 @@ managed guests before the private environment is removed.
 The adapter requires a fresh native result directory for each run, so an early
 failure cannot accidentally report cases from an older run. Both CLI commands
 allocate this directory automatically.
+
+For TMT VMs, the adapter adjusts only `ssh_pwauth` in the fully rendered
+cloud-init configuration before the seed image is built; it does not copy or
+rewrite TMT's template. Non-root privileged artifact collection uses remote
+`sudo -n rsync`, leaving guest ownership and permissions unchanged. This
+adaptation applies only to managed testcloud guests, not caller-owned SSH targets.
 
 Writable framework checkouts and installed environments are private to a run.
 Caller sources are copied, including uncommitted changes, rather than modified

@@ -137,6 +137,7 @@ func TestSkillsDocumentArtifactTestDefaults(t *testing.T) {
 		assert.Contains(t, component, "Source overrides are copied into private runtimes")
 		assert.Contains(t, component, "python-environment.txt")
 		assert.Contains(t, component, "at most one provision phase")
+		assert.Contains(t, component, "Bootstrap policy must be explicit")
 
 		image, err := catalog.SkillDocument("azldev-image", testParams())
 		require.NoError(t, err)
@@ -145,6 +146,7 @@ func TestSkillsDocumentArtifactTestDefaults(t *testing.T) {
 		assert.Contains(t, image, "privately convert RAW, VHD, and VHDX")
 		assert.Contains(t, image, "pytest install=none")
 		assert.Contains(t, image, "All-skipped runs")
+		assert.Contains(t, image, "without changing guest permissions")
 	}
 }
 

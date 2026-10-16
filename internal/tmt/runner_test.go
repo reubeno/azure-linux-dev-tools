@@ -252,7 +252,8 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 				expected = append(expected, "virtual", "--become", "--image", "/images/image", "--user", "azureuser",
 					"--hardware", "cpu.cores = 4", "--hardware", "memory >= 4 GB", "--hardware", "boot.method = uefi")
 
-				assert.Equal(t, "tmt[provision-virtual]", commands[1].Args[len(commands[1].Args)-1])
+				assert.True(t, strings.HasPrefix(commands[1].Args[len(commands[1].Args)-1],
+					"tmt[provision-virtual] @ git+https://github.com/teemtee/tmt.git@"))
 				assert.Contains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
 			case testframework.Container:
 				expected = append(expected, "container", "--become", "--image", imageID,
@@ -267,13 +268,10 @@ func TestRunAllStrategiesPreservesSourceAndNativeSteps(t *testing.T) {
 			}
 
 			if strategy != testframework.VM {
-				assert.Equal(t, "tmt", commands[1].Args[len(commands[1].Args)-1])
+				assert.True(t, strings.HasPrefix(commands[1].Args[len(commands[1].Args)-1],
+					"tmt @ git+https://github.com/teemtee/tmt.git@"))
 
-				if strategy == testframework.SSH {
-					assert.Contains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
-				} else {
-					assert.NotContains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
-				}
+				assert.NotContains(t, command.Env, "TMT_PLUGINS=/work/run/tmt-plugins")
 			}
 
 			if strategy == testframework.SSH || strategy == testframework.Host {
@@ -847,7 +845,7 @@ func newRunContext(t *testing.T) *testctx.TestCtx {
 	ctx := testctx.NewCtx()
 
 	ctx.Ctx = t.Context()
-	for _, program := range []string{"python3", "sudo", "podman", "qemu-img"} {
+	for _, program := range []string{"python3", "sudo", "podman", "qemu-img", "git"} {
 		ctx.CmdFactory.RegisterCommandInSearchPath(program)
 	}
 

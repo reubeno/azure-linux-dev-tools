@@ -8,3 +8,11 @@ provision:
   become: true
 execute:
   how: tmt
+finish:
+  how: shell
+  script: |
+    set -eu
+    artifact="$(cat /var/tmp/azldev-private-artifact-path)"
+    test "$(stat -c '%a:%U' "$artifact")" = "700:root"
+    test "$(stat -c '%a:%U' "$artifact/secret.txt")" = "600:root"
+    echo "private artifact permissions unchanged after execute pull"

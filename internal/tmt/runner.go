@@ -294,9 +294,13 @@ func validateSource(ctx opctx.Ctx, sourceDir string) error {
 func (r *Runner) prepareEnvironment(ctx opctx.Ctx,
 	request testframework.RunRequest, privateDir string,
 ) (string, error) {
-	requirement := "tmt"
-	if extras := r.config.installExtras(request.Execution.Strategy); len(extras) > 0 {
-		requirement += "[" + strings.Join(extras, ",") + "]"
+	if err := prereqs.RequireExecutable(ctx, "git", nil); err != nil {
+		return "", fmt.Errorf("git-pinned TMT runtime requires git:\n%w", err)
+	}
+
+	requirement, err := runtimeRequirement(r.config.installExtras(request.Execution.Strategy))
+	if err != nil {
+		return "", err
 	}
 
 	venvDir := filepath.Join(privateDir, "venv")
@@ -319,7 +323,27 @@ func (r *Runner) prepareEnvironment(ctx opctx.Ctx,
 		return "", fmt.Errorf("record TMT runtime:\n%w", err)
 	}
 
+	if err := fileutils.WriteFile(ctx.FS(), filepath.Join(request.WorkDir, "tmt-requirements.txt"),
+		requirements, fileperms.PrivateFile); err != nil {
+		return "", fmt.Errorf("record TMT dependency constraints:\n%w", err)
+	}
+
 	return filepath.Join(venvDir, "bin", "tmt"), nil
+}
+
+func runtimeRequirement(extras []string) (string, error) {
+	name := "tmt"
+	if len(extras) > 0 {
+		name += "[" + strings.Join(extras, ",") + "]"
+	}
+
+	for _, line := range strings.Split(string(requirements), "\n") {
+		if source, ok := strings.CutPrefix(line, "tmt @ "); ok {
+			return name + " @ " + source, nil
+		}
+	}
+
+	return "", errors.New("missing direct TMT source requirement")
 }
 
 func (r *Runner) prepareRunDir(ctx opctx.Ctx, request testframework.RunRequest) (string, error) {
@@ -329,10 +353,6 @@ func (r *Runner) prepareRunDir(ctx opctx.Ctx, request testframework.RunRequest) 
 
 	if err := fileutils.MkdirAll(ctx.FS(), request.WorkDir); err != nil {
 		return "", fmt.Errorf("create TMT work directory:\n%w", err)
-	}
-
-	if request.Execution.Strategy == testframework.SSH {
-		return writeSSHPlugin(ctx, request.WorkDir)
 	}
 
 	if request.Execution.Strategy != testframework.VM {

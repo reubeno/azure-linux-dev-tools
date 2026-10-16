@@ -109,6 +109,29 @@ prepare step. TMT retains control of discovery, execution, reporting, and finish
 | Provision arguments | `provision.extra-args` | string array | Supported native provisioner options, such as `--memory 4096` or `--ssh-option`. |
 | Cloud-init commands | `cloud-init-runcmds` | string array | Additional guest first-boot commands for VM tests, before readiness probing. Not host commands. |
 
+Guest bootstrap policy is explicit and test-scoped. The adapter does not create a
+`fedora` account or inject firewall commands. For an Azure Linux image with
+firewalld enabled, a test using testcloud's session connection can declare:
+
+```toml
+[tests.azurelinux-smoke.tmt]
+plan = "/plans/smoke"
+cloud-init-runcmds = [
+  "firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp",
+]
+```
+
+These commands run in declaration order, before testcloud starts its readiness
+service. TCP 10022 is needed by `qemu:///session`, not a universal VM requirement.
+Use commands appropriate to the selected image and connection mode; associate
+the named test with the relevant images/components. This field is not an
+image-level default automatically inherited by unrelated tests. A TMT `prepare`
+step cannot fix a port needed to complete provisioning.
+
+**Migration:** tests that relied on azldev's previous automatic firewall
+workaround must now declare their bootstrap commands. Rules without
+`--permanent` last until reboot; they are not removed immediately after readiness.
+
 Native argument lists are scope-checked. They cannot override azldev's artifact,
 work-directory, report, or execution-strategy selection, or inject another TMT
 step. The older `provision-extra-args` spelling is accepted as an alias;
@@ -130,6 +153,11 @@ extra may also require a C compiler, Python development headers, `pkg-config`,
 and libvirt development files. These are host prerequisites, not guest packages;
 native installation errors remain visible. Host and container strategies do not
 require the VM stack.
+
+TMT itself is installed from the full Git commit in
+`internal/tmt/requirements.txt`, not a floating branch. Runtime setup requires
+`git` and Python 3.12 or newer. The selected commit includes upstream's
+one-second SSH-master polling fix; azldev no longer patches SSH polling.
 
 For example, define a plan as follows:
 

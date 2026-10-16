@@ -139,5 +139,6 @@ jobs:
             out/framework-e2e/**/results.json
             out/framework-e2e/**/inputs.json
             out/framework-e2e/**/python-environment.txt
+            out/framework-e2e/**/tmt-requirements.txt
             out/framework-e2e/**/lisa-revision.txt
             out/tmt-virtual-e2e/**/artifacts/*

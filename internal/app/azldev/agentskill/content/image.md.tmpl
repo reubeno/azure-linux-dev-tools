@@ -53,6 +53,10 @@ are reported as skipped by every framework; collecting zero cases is an error.
 Normalized cases retain native statuses, and reporting/cleanup failures remain errors.
 File inputs are private, read-only snapshots; manifests retain their original
 paths and hashes after cleanup. OCI store images use `ociImageId`, not `path`.
+Declare image-specific TMT VM bootstrap commands in the named test's
+`tmt.cloud-init-runcmds`; azldev does not automatically create a `fedora` account
+or open guest firewall ports. Session-mode testcloud readiness uses TCP 10022.
+Managed VM artifact collection uses remote sudo without changing guest permissions.
 
 Published images live under
 `[distros.<distro>.versions.<version>.images.<name>.architectures]`, independently

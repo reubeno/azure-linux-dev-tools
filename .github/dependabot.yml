@@ -49,7 +49,8 @@ updates:
         patterns:
           - "*"
 
-  # Shared TMT runtime constraints
+  # Shared TMT runtime constraints. The full Git TMT pin is advanced deliberately
+  # with native contract validation; do not replace it with a floating branch.
   - package-ecosystem: "pip"
     directory: "/internal/tmt"
     schedule:

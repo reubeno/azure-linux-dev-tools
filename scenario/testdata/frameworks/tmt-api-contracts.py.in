@@ -1,35 +1,120 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-"""Check generated compatibility shims against the actual pinned TMT API."""
+"""Check generated VM adaptations against the actual pinned TMT and testcloud."""
+import importlib.metadata
 import importlib.util
+import json
 import sys
+import tempfile
+from pathlib import Path
+from string import Template
 from types import SimpleNamespace
+
 import tmt.guest as guest
-import tmt.steps.provision.testcloud as testcloud
+import tmt.steps.provision.testcloud as provision
+from tmt.utils import from_yaml
+from testcloud.instance import Instance
+from testcloud.workarounds import Workarounds
 
-waiting = guest.default_ssh_master_start_waiting()
-expected_waiting = vars(waiting).copy()
-expected_waiting["tick"] = min(waiting.tick, 1.0)
-guest.default_ssh_master_start_waiting = lambda: waiting
-guest.GuestSsh.pull = lambda self, source=None, destination=None, options=None: (source, destination, options)
+requirements = Path(sys.argv[2]).read_text().splitlines()
+tmt_requirement = next(line for line in requirements if line.startswith("tmt @ "))
+url, revision = tmt_requirement.removeprefix("tmt @ git+").rsplit("@", 1)
+assert len(revision) == 40
+installed_source = json.loads(importlib.metadata.distribution("tmt").read_text("direct_url.json"))
+assert installed_source["url"] == url
+assert installed_source["vcs_info"]["commit_id"] == revision
+assert installed_source["vcs_info"]["requested_revision"] == revision
+runtime_lines = Path(sys.argv[3]).read_text().splitlines()
+runtime_source = json.loads(next(line.removeprefix("# source tmt: ") for line in runtime_lines
+                                if line.startswith("# source tmt: ")))
+assert runtime_source == installed_source, "the executed runtime must use the same Git pin"
+for requirement in requirements:
+    if "==" in requirement and not requirement.startswith("#"):
+        name, version = requirement.split("==", 1)
+        assert importlib.metadata.version(name) == version
+        assert requirement in runtime_lines
 
+original_waiting = guest.default_ssh_master_start_waiting
+waiting = original_waiting()
+assert waiting.tick == 1.0, "the Git revision must supply the polling fix without our shim"
+original_ssh_pull = guest.GuestSsh.pull
+original_user_data = Instance._create_user_data
+original_template = provision.USER_DATA
+deny_pull = False
+
+def capture_pull(self, source=None, destination=None, options=None):
+    if deny_pull:
+        raise PermissionError("sudo denied")
+    return source, destination, options
+
+provision.GuestTestcloud.pull = capture_pull
 spec = importlib.util.spec_from_file_location("azldev_generated_contract", sys.argv[1])
 assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+assert guest.default_ssh_master_start_waiting is original_waiting
+assert guest.GuestSsh.pull is original_ssh_pull, "only managed testcloud guests may use privileged pull"
+assert provision.USER_DATA == original_template, "do not rewrite upstream templates"
 
-assert guest.default_ssh_master_start_waiting() is waiting
-assert vars(waiting) == expected_waiting, "only the SSH readiness tick may change"
-assert "ssh_pwauth: true" not in testcloud.USER_DATA
-assert "ssh_pwauth: false" in testcloud.USER_DATA
-assert any("--add-port=10022/tcp" in command for command in testcloud.TESTCLOUD_WORKAROUNDS)
-assert any("--add-service=ssh" in command for command in testcloud.TESTCLOUD_WORKAROUNDS)
+def instance(root):
+    root.mkdir()
+    (root / "meta").mkdir()
+    workarounds = Workarounds(defaults=False)
+    for command in provision.TESTCLOUD_WORKAROUNDS:
+        workarounds.add(command)
+    return SimpleNamespace(
+        path=str(root), name="contract", connection="qemu:///session",
+        workarounds=workarounds, _adjust_mount_pts=lambda _: None,
+    )
 
-commands = []
-target = SimpleNamespace(user="tester", plan_workdir="/plan", execute=lambda command, **kwargs: commands.append(str(command)))
-assert guest.GuestSsh.pull(target, "/source", "/destination", ["option"]) == ("/source", "/destination", ["option"])
-assert len(commands) == 1 and "sudo" in commands[0] and "chmod" in commands[0] and "/source" in commands[0]
-target.user = "root"
-assert guest.GuestSsh.pull(target) == (None, None, None)
-assert len(commands) == 1, "root pulls must not mutate guest permissions"
-print("Native TMT compatibility API contracts passed")
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    template = Template(original_template).safe_substitute(
+        user_name="contract-user", public_key="ssh-ed25519 fixture-key",
+    )
+    template += 'future-setting:\n  nested: [one, two]\n  literal: "on"\n  content: "escaped\\0value"\n'
+    before = instance(root / "before")
+    original_user_data(before, "fixture-password", user_data_tpl=template)
+    expected = from_yaml((root / "before/meta/user-data").read_text())
+    expected["ssh_pwauth"] = False
+    after = instance(root / "after")
+    Instance._create_user_data(after, "fixture-password", user_data_tpl=template)
+    actual = from_yaml((root / "after/meta/user-data").read_text())
+    assert actual == expected, "only the password-SSH setting may change"
+    assert actual["future-setting"]["nested"] == ["one", "two"]
+    assert actual["users"][1]["name"] == "contract-user"
+    assert actual["users"][1]["ssh_authorized_keys"] == ["ssh-ed25519 fixture-key"]
+    assert "${runcommands}" not in (root / "after/meta/user-data").read_text()
+    assert any("systemctl start testcloud.service" in str(command) for command in actual["runcmd"])
+    for index, unsupported in enumerate(["#cloud-config\n[]\n", "#unsupported\nvalue"]):
+        target = instance(root / f"invalid-{index}")
+        try:
+            Instance._create_user_data(target, "fixture-password", user_data_tpl=unsupported)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("unsupported user-data must fail rather than replace its configuration")
+
+target = SimpleNamespace(user="tester", become=True, is_dry_run=False)
+options = guest.DEFAULT_PULL_OPTIONS.copy()
+options.exclude = ["private-exclusion"]
+original_args = options.to_rsync()
+source, destination, elevated = provision.GuestTestcloud.pull(target, "/source", "/destination", options)
+assert (source, destination) == ("/source", "/destination")
+assert elevated.to_rsync() == [*original_args, "--rsync-path", "sudo -n rsync"]
+assert options.to_rsync() == original_args, "never mutate caller/shared transfer options"
+assert elevated.exclude == ["private-exclusion"]
+_, _, defaults = provision.GuestTestcloud.pull(target)
+assert defaults.to_rsync() == [*guest.DEFAULT_PULL_OPTIONS.to_rsync(), "--rsync-path", "sudo -n rsync"]
+for user, become, dry_run in [("root", True, False), ("tester", False, False), ("tester", True, True)]:
+    target.user, target.become, target.is_dry_run = user, become, dry_run
+    assert provision.GuestTestcloud.pull(target, options=options)[2] is options
+deny_pull = True
+target.user, target.become, target.is_dry_run = "tester", True, False
+try:
+    provision.GuestTestcloud.pull(target)
+except PermissionError:
+    pass
+else:
+    raise AssertionError("permission errors must not be suppressed or repaired with chmod")
+print("Native TMT pin, cloud-config merge, upstream polling and privileged-pull contracts passed")

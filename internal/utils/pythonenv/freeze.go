@@ -24,9 +24,11 @@ func Freeze(ctx opctx.Ctx, python, destination string) error {
 		return nil
 	}
 
-	const metadataScript = "import importlib.metadata as m, sys; " +
+	const metadataScript = "import importlib.metadata as m, json, sys; " +
 		"print('# Python ' + sys.version.replace('\\n', ' ')); " +
-		"print('\\n'.join(sorted(d.metadata['Name'] + '==' + d.version for d in m.distributions())))"
+		"print('\\n'.join(sorted(d.metadata['Name'] + '==' + d.version for d in m.distributions()))); " +
+		"print('\\n'.join('# source ' + d.metadata['Name'] + ': ' + json.dumps(json.loads(raw), sort_keys=True) " +
+		"for d in m.distributions() if (raw := d.read_text('direct_url.json'))))"
 
 	raw := exec.CommandContext(ctx, python, "-I", "-B", "-c", metadataScript)
 

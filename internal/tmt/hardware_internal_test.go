@@ -207,42 +207,35 @@ func TestCommandEnv(t *testing.T) {
 	}
 }
 
-func TestTestcloudPluginRepairsPermissionsBeforePull(t *testing.T) {
-	ctx := testctx.NewCtx()
-	pluginDir, err := writeTestcloudPlugin(ctx, "/work/run")
-	require.NoError(t, err)
-	plugin, err := fileutils.ReadFile(ctx.FS(), filepath.Join(pluginDir, "azldev_testcloud.py"))
-	require.NoError(t, err)
+func TestTestcloudPluginUsesOnlyConfiguredBootstrapAndScopedPull(t *testing.T) {
+	for _, commands := range [][]string{nil, {`printf '%s\n' "quoted"`, "echo second"}} {
+		ctx := testctx.NewCtx()
+		pluginDir, err := writeTestcloudPlugin(ctx, "/work/run", commands...)
+		require.NoError(t, err)
+		plugin, err := fileutils.ReadFile(ctx.FS(), filepath.Join(pluginDir, "azldev_testcloud.py"))
+		require.NoError(t, err)
 
-	text := string(plugin)
-	assert.True(t, strings.HasPrefix(text, "import tmt.steps.provision.testcloud as testcloud\n"))
-	assert.Contains(t, text, "\nfrom tmt.guest import GuestSsh\n")
-	assert.Contains(t, text, "_azldev_original_pull = GuestSsh.pull")
-	assert.Contains(t, text, "GuestSsh.pull = _azldev_pull")
-	assert.Contains(t, text, `testcloud.USER_DATA.count("ssh_pwauth: true") != 1`)
-	assert.Contains(t, text, `testcloud.USER_DATA.replace("ssh_pwauth: true", "ssh_pwauth: false")`)
-	assert.Contains(t, text, `if self.user != "root":`)
-	assert.Contains(t, text, "source=source, destination=destination, options=options")
-	_, encoded, found := strings.Cut(text, "testcloud.TESTCLOUD_WORKAROUNDS.extend(")
-	require.True(t, found)
-	encoded, _, found = strings.Cut(encoded, ")\n")
-	require.True(t, found)
+		text := string(plugin)
+		_, encoded, found := strings.Cut(text, "provision.TESTCLOUD_WORKAROUNDS.extend(")
+		require.True(t, found)
+		encoded, _, found = strings.Cut(encoded, ")\n")
+		require.True(t, found)
 
-	var workarounds []string
-	require.NoError(t, json.Unmarshal([]byte(encoded), &workarounds))
-	assert.Equal(t, []string{
-		"id -u fedora >/dev/null 2>&1 || useradd --create-home --groups wheel fedora",
-		"if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then " +
-			"firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp; fi",
-	}, workarounds)
-	assert.Contains(t, text, "firewall-cmd --add-port=10022/tcp")
-	assert.NotContains(t, text, "systemctl stop firewalld")
-	assert.NotContains(t, text, "--permanent")
-	assert.Contains(t, text, "waiting = _azldev_original_waiting()")
-	assert.Contains(t, text, "waiting.tick = min(waiting.tick, 1.0)")
-	assert.NotContains(t, text, "waiting.deadline =")
-	assert.Less(t, strings.Index(text, `Command("sudo", "chmod", "-R", "a+rX", path)`),
-		strings.Index(text, "return _azldev_original_pull("))
+		var decoded []string
+		require.NoError(t, json.Unmarshal([]byte(encoded), &decoded))
+		assert.Equal(t, append([]string{}, commands...), decoded)
+		assert.Contains(t, text, `config["ssh_pwauth"] = False`)
+		assert.Contains(t, text, `YAML(typ="safe")`)
+		assert.Contains(t, text, "yaml.width = sys.maxsize")
+		assert.Contains(t, text, "provision.GuestTestcloud.pull = _azldev_pull")
+		assert.Contains(t, text, `"--rsync-path", "sudo -n rsync"`)
+		assert.NotContains(t, text, "GuestSsh.pull =")
+		assert.NotContains(t, text, "USER_DATA")
+		assert.NotContains(t, text, "firewall-cmd")
+		assert.NotContains(t, text, "fedora")
+		assert.NotContains(t, text, "chmod")
+		assert.NotContains(t, text, "default_ssh_master_start_waiting")
+	}
 }
 
 func TestDirsOverlap(t *testing.T) {

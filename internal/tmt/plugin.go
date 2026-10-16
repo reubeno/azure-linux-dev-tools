@@ -13,68 +13,76 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/utils/fileutils"
 )
 
-const testcloudPluginTemplate = `import tmt.steps.provision.testcloud as testcloud
-from tmt.guest import GuestSsh
-from tmt.utils import Command
+// These shims touch only VM provisioning. Keep them until upstream provides
+// structured cloud-config overrides and privileged pull (as it does for push).
+const testcloudPluginTemplate = `import io
+import sys
+from pathlib import Path
 
-# Guest access uses the generated key. Do not enable password SSH on an image
-# whose own policy disables it.
-if testcloud.USER_DATA.count("ssh_pwauth: true") != 1:
-	raise RuntimeError("Unsupported TMT cloud-init SSH template")
-testcloud.USER_DATA = testcloud.USER_DATA.replace("ssh_pwauth: true", "ssh_pwauth: false")
+import tmt.steps.provision.testcloud as provision
+from tmt.guest import DEFAULT_PULL_OPTIONS
+from ruamel.yaml import YAML
 
-testcloud.TESTCLOUD_WORKAROUNDS.extend(%s)
+from testcloud.instance import Instance
 
-# Finish tasks pull their artifacts immediately. A later finish task cannot
-# repair root-owned output in time, so fix permissions before each pull.
-_azldev_original_pull = GuestSsh.pull
+provision.TESTCLOUD_WORKAROUNDS.extend(%s)
+
+_azldev_original_user_data = Instance._create_user_data
+
+def _azldev_user_data(self, password, user_data_tpl=None, overwrite=False):
+    _azldev_original_user_data(self, password, user_data_tpl=user_data_tpl, overwrite=overwrite)
+    # testcloud has expanded users, keys, passwords and readiness commands.
+    # Its prepare() builds the seed ISO only after this method returns.
+    path = Path(self.path) / "meta" / "user-data"
+    text = path.read_text()
+    if not text.startswith("#cloud-config\n"):
+        raise RuntimeError("Unsupported testcloud user-data format")
+    yaml = YAML(typ="safe")
+    yaml.version = (1, 1)
+    # Avoid folding long shell commands: folding can change quoted whitespace.
+    yaml.width = sys.maxsize
+    config = yaml.load(text)
+    if not isinstance(config, dict):
+        raise RuntimeError("Expected a cloud-config mapping")
+    config["ssh_pwauth"] = False
+    rendered = io.StringIO()
+    yaml.dump(config, rendered)
+    path.write_text("#cloud-config\n" + rendered.getvalue())
+
+Instance._create_user_data = _azldev_user_data
+
+class _AzldevPullOptions:
+    def __init__(self, original):
+        self.original = original
+
+    def to_rsync(self):
+        return [*self.original.to_rsync(), "--rsync-path", "sudo -n rsync"]
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+_azldev_original_pull = provision.GuestTestcloud.pull
 
 def _azldev_pull(self, source=None, destination=None, options=None):
-	path = source or self.plan_workdir
-	if self.user != "root":
-		self.execute(Command("sudo", "chmod", "-R", "a+rX", path), silent=True)
-	return _azldev_original_pull(self, source=source, destination=destination, options=options)
+    if self.user != "root" and self.become and not self.is_dry_run:
+        options = _AzldevPullOptions(options if options is not None else DEFAULT_PULL_OPTIONS)
+    return _azldev_original_pull(self, source=source, destination=destination, options=options)
 
-GuestSsh.pull = _azldev_pull
+provision.GuestTestcloud.pull = _azldev_pull
 `
 
-// The pinned TMT release uses a 30-second default poll interval when starting
-// each SSH master, even when authentication completes immediately. Preserve its
-// deadline and backoff policy but check readiness at most one second apart.
-const sshWaitingPlugin = `
-import tmt.guest as _azldev_guest
-
-_azldev_original_waiting = _azldev_guest.default_ssh_master_start_waiting
-
-def _azldev_ssh_waiting():
-    waiting = _azldev_original_waiting()
-    waiting.tick = min(waiting.tick, 1.0)
-    return waiting
-
-_azldev_guest.default_ssh_master_start_waiting = _azldev_ssh_waiting
-`
-
-func writeTestcloudPlugin(ctx opctx.Ctx, workDir string, extraRuncmds ...string) (string, error) {
-	workarounds := []string{
-		"id -u fedora >/dev/null 2>&1 || useradd --create-home --groups wheel fedora",
-		// Testcloud 0.12 waits for its guest HTTP service on TCP 10022 before
-		// attempting SSH. Open only these temporary guest rules, not the firewall.
-		"if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then " +
-			"firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp; fi",
+func writeTestcloudPlugin(ctx opctx.Ctx, workDir string, runcmds ...string) (string, error) {
+	if runcmds == nil {
+		runcmds = []string{}
 	}
-	workarounds = append(workarounds, extraRuncmds...)
 
-	encoded, err := json.Marshal(workarounds)
+	encoded, err := json.Marshal(runcmds)
 	if err != nil {
 		return "", fmt.Errorf("encode testcloud workarounds:\n%w", err)
 	}
 
 	return writePlugin(ctx, workDir, "azldev_testcloud.py",
-		fmt.Sprintf(testcloudPluginTemplate, encoded)+sshWaitingPlugin)
-}
-
-func writeSSHPlugin(ctx opctx.Ctx, workDir string) (string, error) {
-	return writePlugin(ctx, workDir, "azldev_ssh.py", sshWaitingPlugin)
+		fmt.Sprintf(testcloudPluginTemplate, encoded))
 }
 
 func writePlugin(ctx opctx.Ctx, workDir, name, body string) (string, error) {

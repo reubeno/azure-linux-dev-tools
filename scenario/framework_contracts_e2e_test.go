@@ -98,6 +98,7 @@ func collectNativeReports(t *testing.T, runtime, output string) {
 		"*.log", "*.xml", "*.txt", "timings.json", "artifacts/*",
 		"runs/*/tests/*/results.json", "runs/*/tests/*/*/inputs.json",
 		"runs/*/tests/*/*/junit.xml", "runs/*/tests/*/*/python-environment.txt",
+		"runs/*/tests/*/*/tmt-requirements.txt",
 		"runs/*/tests/*/*/tmt/tmt-output.log",
 		"runs/*/tests/*/*/*/*/*.log", "runs/*/tests/*/*/*/*/*/*.log",
 		"runs/*/tests/*/*/*/*/environments/*/*/*.log",

@@ -149,16 +149,39 @@ metadata API, including prepared environments without pip. The LISA fixture
 revision and pytest version are also checked in; dependency updates must pass
 the native job.
 
+TMT is temporarily pinned to the full Git commit
+`8e05bafd17fb4d09d97d76a4bbd5677aee723f8b`, containing
+[teemtee/tmt#5239](https://github.com/teemtee/tmt/pull/5239), rather than a
+published release. Do not replace it with `main` or a moving tag. Advance the
+constraint deliberately and run the native contracts; return to a published
+release once it includes the required fixes. The native test verifies both
+pip's PEP 610 `direct_url.json` and the executed runtime's recorded commit.
+
+Remaining VM compatibility adaptations are limited to the following:
+
+| Adaptation | Boundary and removal condition |
+| --- | --- |
+| Explicit TOML bootstrap commands | Appended through TMT's workaround list before readiness; replace when upstream exposes a supported guest-bootstrap hook. No hard-coded image commands. |
+| `ssh_pwauth: false` | Merge into generated cloud-config after testcloud expands placeholders and before ISO construction; replace when upstream supports structured cloud-config overrides. Preserve all other fields. |
+| Privileged artifact pull | Wrap only `GuestTestcloud.pull` transfer options with remote `sudo -n rsync`; remove when upstream provides privileged pull analogous to `push(superuser=True)`. Never use recursive chmod as fallback. |
+
+`tmt-api-contracts.py.in` exercises the real pinned configuration renderer,
+preservation of unrelated fields, scope of the pull wrapper, option forwarding,
+and error propagation. The VM probe also retrieves root-owned `0600` files from
+a `0700` directory and verifies guest ownership/modes after the execute pull.
+The upstream waiting factory is checked directly, with no local polling patch.
+
 Useful live checks include candidate package identity and behavior, unchanged
 input files, guest cleanup on failure/cancellation, mixed-framework selection,
 and per-case reports. Run host-mode tests only inside disposable systems.
 For SSH testing, verify the caller-owned target remains reachable afterwards.
 
 Measure framework setup, guest provisioning, native test execution, and cleanup
-separately. For example, pinned TMT's default SSH-master polling introduced
-four 30-second waits in a trivial SSH probe; one-second polling preserves the
-deadline while avoiding that latency. Testcloud's readiness service is distinct
-from SSH and needs TCP 10022 available in a firewalld-managed guest.
+separately. Earlier TMT versions introduced four 30-second SSH-master waits in
+a trivial successful SSH probe; the Git pin now contains the upstream
+one-second polling fix, preserving the startup deadline. Testcloud's session
+readiness service is distinct from SSH and needs TCP 10022 available in a
+firewalld-managed guest; the fixture declares that policy in TOML.
 
 A QEMU fixture must not depend on Hyper-V-only telemetry. A cloud image enabling
 `reporting.telemetry.type: hyperv` can make cloud-init return degraded status on

@@ -49,6 +49,7 @@ virsh uri
 
 cd "${source_dir}"
 azldev component test azldev-tmt-probe \
+    --test vm-probe \
     --execution vm \
     --source-dir "${source_dir}" \
     --work-dir "${tmt_work_dir}" \
@@ -60,10 +61,10 @@ azldev component test azldev-tmt-probe \
 freeze_file="$(find "${tmt_work_dir}" -type f -name python-environment.txt -print -quit)"
 [[ -n "${freeze_file}" ]]
 cp -- "${freeze_file}" "${artifact_dir}/python-freeze"
-while IFS= read -r requirement; do
-    [[ -n "${requirement}" && "${requirement}" != \#* ]] || continue
-    grep -Fxi "${requirement}" "${artifact_dir}/python-freeze"
-done <"/workdir/tmt-requirements.txt"
+runtime_constraints="$(find "${tmt_work_dir}" -type f -name tmt-requirements.txt -print -quit)"
+[[ -n "${runtime_constraints}" ]]
+cmp "${runtime_constraints}" /workdir/tmt-requirements.txt
+cp -- "${runtime_constraints}" "${artifact_dir}/tmt-requirements.txt"
 
 results_file="$(find "${tmt_work_dir}" -type f -path '*/execute/results.yaml' -print -quit)"
 [[ -n "${results_file}" ]] || {
@@ -72,10 +73,18 @@ results_file="$(find "${tmt_work_dir}" -type f -path '*/execute/results.yaml' -p
 }
 grep -q '/tests/smoke' "${results_file}"
 grep -q 'result: pass' "${results_file}"
+private_artifact="$(find "${tmt_work_dir}" -type f -path '*/execute/data/*/private/secret.txt' -print -quit)"
+[[ -n "${private_artifact}" ]]
+grep -qx "private artifact payload" "${private_artifact}"
+# The required finish phase checks guest modes after execute has pulled the
+# private artifact. Its failure must make the azldev invocation above fail.
 
 plugin_file="$(find "${tmt_work_dir}" -type f -name azldev_testcloud.py -print -quit)"
 [[ -n "${plugin_file}" ]]
 python3 -m venv "${work_root}/compat-venv"
+requirement="$(sed -n 's/^tmt @ /tmt[provision-virtual] @ /p' /workdir/tmt-requirements.txt)"
+[[ -n "${requirement}" ]]
 "${work_root}/compat-venv/bin/python3" -m pip install --quiet \
-    --constraint /workdir/tmt-requirements.txt 'tmt[provision-virtual]'
-"${work_root}/compat-venv/bin/python3" /workdir/tmt-api-contracts.py "${plugin_file}"
+    --constraint /workdir/tmt-requirements.txt "${requirement}"
+"${work_root}/compat-venv/bin/python3" /workdir/tmt-api-contracts.py \
+    "${plugin_file}" /workdir/tmt-requirements.txt "${artifact_dir}/python-freeze"

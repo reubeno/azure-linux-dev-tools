@@ -54,6 +54,9 @@ TMT retains per-case results, `tmt-output.log`, and `python-environment.txt`
 under the selected work directory; do not depend on temporary venv paths.
 VM inputs may be RAW, qcow2, VHD, or VHDX; conversion never modifies the original.
 Use TMT `context` for fmf adjustments and `cloud-init-runcmds` for guest VM hooks.
+Bootstrap policy must be explicit: there are no automatic guest firewall or
+`fedora` account workarounds. For session-mode testcloud with firewalld enabled,
+configure the named test to permit SSH and TCP 10022 before readiness.
 Native extra arguments are scope-checked and cannot override managed inputs.
 TMT VM plans must have at most one provision phase. All-skipped runs are skipped;
 reporting or cleanup failures remain errors even if tests also failed.

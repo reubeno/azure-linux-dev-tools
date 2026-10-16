@@ -22,6 +22,8 @@ func TestFreezeDoesNotRequirePipOrEnableBytecodeWrites(t *testing.T) {
 	ctx.CmdFactory.RunAndGetOutputHandler = func(cmd *exec.Cmd) (string, error) {
 		assert.Equal(t, []string{"/prepared/bin/python3", "-I", "-B", "-c"}, cmd.Args[:4])
 		assert.Contains(t, cmd.Args[4], "importlib.metadata")
+		assert.Contains(t, cmd.Args[4], "direct_url.json")
+		assert.Contains(t, cmd.Args[4], "# source ")
 		assert.NotContains(t, cmd.Args, "pip")
 
 		return "# Python fixture\npytest==9.0.2", nil

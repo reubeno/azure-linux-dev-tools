@@ -14,3 +14,14 @@ release-ver = '4.0'
 [components.azldev-tmt-probe.spec]
 type = 'local'
 path = 'azldev-tmt-probe.spec'
+
+[tests.vm-probe]
+type = "tmt"
+
+[tests.vm-probe.tmt]
+plan = "/plans/smoke"
+# This image has firewalld enabled. testcloud's session readiness listener uses TCP 10022.
+cloud-init-runcmds = [
+    "firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp",
+    "printf 'configured-before-readiness\\n' >/var/tmp/azldev-bootstrap-marker",
+]

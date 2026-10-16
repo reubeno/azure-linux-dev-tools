@@ -1,2 +1,3 @@
-tmt==1.78.0
+# Includes teemtee/tmt#5239 (one-second SSH-master polling). Do not float on main.
+tmt @ git+https://github.com/teemtee/tmt.git@8e05bafd17fb4d09d97d76a4bbd5677aee723f8b
 testcloud==0.12.0

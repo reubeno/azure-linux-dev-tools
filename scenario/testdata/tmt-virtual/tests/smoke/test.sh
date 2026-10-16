@@ -8,6 +8,8 @@ source /etc/os-release
 [[ "$(id -u)" == "0" ]]
 [[ "${SUDO_USER:-}" == "azureuser" ]]
 systemctl is-active --quiet firewalld
+! getent passwd fedora
+grep -qx "configured-before-readiness" /var/tmp/azldev-bootstrap-marker
 
 sshd_policy="$(sshd -T -C user=root,host=localhost,addr=127.0.0.1)"
 grep -qx "permitrootlogin no" <<<"${sshd_policy}"
@@ -25,3 +27,8 @@ printf '%s\n' "probe round trip" >"${tmpdir}/input"
 chown azureuser:azureuser "${tmpdir}/input"
 sudo -u azureuser -- azldev-tmt-probe "${tmpdir}/input" "${tmpdir}/output"
 grep -qx "PROBE ROUND TRIP" "${tmpdir}/output"
+
+mkdir -m 0700 "${TMT_TEST_DATA}/private"
+printf '%s\n' "private artifact payload" >"${TMT_TEST_DATA}/private/secret.txt"
+chmod 0600 "${TMT_TEST_DATA}/private/secret.txt"
+printf '%s\n' "${TMT_TEST_DATA}/private" >/var/tmp/azldev-private-artifact-path
