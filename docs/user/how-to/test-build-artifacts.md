@@ -5,6 +5,12 @@ Use `azldev component test NAME` for a component's binary packages, and
 from the same `[tests]` / `[test-groups]` catalog and use the same LISA, TMT,
 and pytest adapters.
 
+For a first run with complete configuration and test files, start with
+[Test a component](test-component.md) or [Test an image](test-image.md).
+For CI, see [Automate artifact tests](automate-artifact-tests.md).
+The examples on this page assume an existing project with named subjects and
+associated tests; paths alone do not replace that configuration.
+
 ## Select the subject and its supporting image
 
 The default subject is a local build: existing output is reused, or the normal
@@ -39,6 +45,9 @@ Subject and supporting-image overrides are independent:
 # Local subject, explicitly chosen supporting image
 azldev component test curl --base-image vm-base
 
+# Reuse a local supporting image, building it if missing
+azldev component test curl --base-image vm-base --base-image-source local
+
 # Rebuild the supporting image using this project's recipe
 azldev component test curl --base-image vm-base --rebuild-base-image
 
@@ -52,7 +61,11 @@ azldev image test vm-base --artifact-source lkg
 ```
 
 LKG base-image downloads work without a local recipe. Rebuilding a base image
-requires one. A failed build does not fall back to LKG.
+requires one. `--base-image-source local` uses azldev's recorded local output
+(or recognized legacy output), not an arbitrary file in the current directory;
+if no local output exists, it builds using the project-local recipe.
+Use `--base-image-path` for a particular file. A failed build does not fall back
+to LKG.
 
 Live component tests install all selected binary subpackages. **TODO:** automatic
 conflict-aware selection is deferred; if output subpackages conflict, use
@@ -118,8 +131,9 @@ azldev image test vm-base --test boot-smoke --fail-fast
 ```
 
 Selectors accept either test names or test-group names. Duplicates are run once;
-unknown selectors are errors even when another selector matches. Without
-selectors, associated tests run. An empty selection is an error.
+unknown selectors are errors even when another selector matches. Explicit
+selectors replace the associations for this invocation. Without selectors,
+associated tests run. An empty selection is an error.
 
 Each invocation retains an isolated result directory beneath `<work-dir>/tests/`.
 TMT executes from a short, owned `/var/tmp` workspace, so SSH guests do not need
@@ -179,6 +193,11 @@ must read it from the manifest; `{image-path}` is only valid for file artifacts.
 Relative CLI paths resolve against the selected project directory (`-C`).
 `--work-dir` chooses the root for run output. The default is the project's work
 directory, not the caller's current directory.
+
+Exit code 0 includes all-skipped runs; failures and infrastructure errors return
+nonzero. Early configuration errors may produce no results file, and native
+output can share stdout with `-O json`. Use a unique work root and consume the
+retained JSON as shown in [Automate artifact tests](automate-artifact-tests.md).
 
 The old `--test-suite` flag is an alias for `--test`. Component `--image-path`
 is an alias for `--base-image-path`, and `--provision virtual/local` maps to

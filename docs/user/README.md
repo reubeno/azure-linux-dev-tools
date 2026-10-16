@@ -7,6 +7,9 @@
 - [Build a Component](./how-to/build-component.md) — build RPMs from component definitions
 - [Build an Image](./how-to/build-image.md) — build and boot Azure Linux images
 - [Test Build Artifacts](./how-to/test-build-artifacts.md) — select inputs and run LISA, TMT, or pytest tests
+- [Test a Component](./how-to/test-component.md) — install an existing zlib-ng RPM in a TMT VM and test it
+- [Test an Image](./how-to/test-image.md) — complete pytest inspection and LISA guest-test examples
+- [Automate Artifact Tests](./how-to/automate-artifact-tests.md) — exit status, JSON results, and CI reports
 - [Set Up AI Coding Agents](./how-to/set-up-ai-agents.md) — emit agent skill and instruction files
 - [Preview the Lock-File-Free Mode](./how-to/preview-without-lockfile.md) — opt in to `--without-lockfile`
 

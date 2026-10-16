@@ -14,8 +14,8 @@ All config files share the same schema — there is no distinction between a "ro
 | `components` | map of objects | Component (package) definitions | [Components](components.md) |
 | `component-groups` | map of objects | Named groups of components with shared defaults | [Component Groups](component-groups.md) |
 | `images` | map of objects | Image definitions (VMs, containers) | [Images](images.md) |
-| `tests` | map of objects | Named test definitions (new-shape, parse-only) | [Tests and Test Groups](tests.md) |
-| `test-groups` | map of objects | Named bundles of test references (new-shape, parse-only) | [Tests and Test Groups](tests.md) |
+| `tests` | map of objects | Named LISA, TMT, and pytest definitions used by both test commands | [Tests and Test Groups](tests.md) |
+| `test-groups` | map of objects | Named bundles of test references selectable with `--test` | [Tests and Test Groups](tests.md) |
 | `sku-groups` | map of objects | Named Azure VM size lists for image test fan-out | [Tests — SKU Groups](tests.md#sku-groups) |
 | `vm-skus` | map of objects | Per-VM-size metadata for external test orchestration | [Tests — VM SKUs](tests.md#vm-skus) |
 | `tools` | object | Configuration for external tools used by azldev | [Tools](tools.md) |
@@ -42,6 +42,10 @@ Includes are resolved recursively — included files can themselves declare furt
 > **Preview:** With the global `--without-lockfile` flag, the generated upstream-commit files must be included before any component-specific TOML configuration, so that later component definitions supply the remaining `spec` fields and may explicitly override a generated pin. See [Preview the Lock-File-Free Mode](../../how-to/preview-without-lockfile.md).
 
 ## Minimal Example
+
+For self-contained projects that test existing artifacts rather than building
+them, see the [component](../../how-to/test-component.md) and
+[image](../../how-to/test-image.md) walkthroughs.
 
 A minimal root config file that includes distro definitions and a project:
 

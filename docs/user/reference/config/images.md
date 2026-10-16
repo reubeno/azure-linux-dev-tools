@@ -67,7 +67,12 @@ The `tests` subtable links an image to one or more tests or test groups defined 
 
 | Field | TOML Key | Type | Required | Description |
 |-------|----------|------|----------|-------------|
-| Tests | `tests` | array of [TestRef](tests.md#test-reference) | No | References to `[tests.<name>]` entries or `[test-groups.<name>]` entries (parse-only; see [Tests and Test Groups](tests.md)). |
+| Tests | `tests` | array of [TestRef](tests.md#test-reference) | No | References to `[tests.<name>]` or `[test-groups.<name>]` entries run by `azldev image test`. Explicit `--test` selectors replace these defaults for that invocation. |
+
+An image tested with `--image-path` does not need a build `definition`.
+See [Test an existing image](../../how-to/test-image.md) for a complete example.
+SKU fan-out remains the responsibility of external orchestration; the local
+command runs each selected named test once.
 
 Image test references may additionally set [`sku-groups`](tests.md#test-reference) to fan a test or group out across the Azure VM sizes of one or more [`[sku-groups.<name>]`](tests.md#sku-groups) entries:
 
@@ -166,5 +171,5 @@ channels = ["registry-prod", "registry-staging"]
 ## Related Resources
 
 - [Config File Structure](config-file.md) — top-level config file layout
-- [Tests and Test Groups](tests.md) — new-shape test/group definitions referenced by `[images.<name>.tests]`
+- [Tests and Test Groups](tests.md) — executable test/group definitions referenced by `[images.<name>.tests]`
 - [Tools](tools.md) — Image Customizer tool configuration

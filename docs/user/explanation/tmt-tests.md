@@ -102,10 +102,10 @@ packages whose upstream dist-git already ships `plans/`/`tests/`), `azldev
 component test` still needs a test source to run: pass `--source-dir` pointed
 at a local fmf tree (see below). Without a catalog entry **and** without
 `--source-dir`, the command fails outright — there is no implicit default
-source to fall back to. When `plan` is omitted **and `--provision local` is
+source to fall back to. When `plan` is omitted **and `--execution host` is
 used**, tmt discovers and runs every enabled plan it finds — the same default
 Fedora's own Testing Farm uses (`tmt plan ls --filter enabled:true`, not a fixed
-name) — instead of guessing one. `--provision virtual` (the default) always
+name) — instead of guessing one. `--execution vm` (the default) always
 requires an explicit plan (via `tmt.plan` or `--plan`), since hardware export —
 used to build the VM — is resolved per-plan.
 Pass `--plan` to pin a specific plan at the CLI, overriding a catalog entry's
@@ -120,9 +120,10 @@ installation step. Each input source can be overridden independently; see
 [Test build artifacts](../how-to/test-build-artifacts.md).
 
 At runtime [`azldev component test`](../reference/cli/azldev_component_test.md)
-either clones `source@ref`, or (with `--source-dir`) runs straight from a local
-fmf tree instead — the output of either `azldev component render` (with
-`render.skip-file-filter = true`) or `azldev component prepare-sources`. Either
+either clones `source@ref`, or (with `--source-dir`) copies a local
+fmf tree into a private workspace — for example, the output of
+`azldev component render` (with `render.skip-file-filter = true`) or
+`azldev component prepare-sources`. Either
 way, it uses TMT's VM, container, existing SSH, or host provisioner, installs
 the selected candidate RPMs, and executes
 the selected plan(s). **The plan's own `discover` step then decides where the
@@ -148,10 +149,12 @@ of erroring — no manual exclusion list. (`gating.yaml` is the only per-package
 file, and it declares which *test results* are required, not which RPMs to
 install.)
 
-The same technique works locally: `createrepo_c` the built RPMs, then
-`dnf --repofrompath=cand,/absolute/path/to/repo --setopt=cand.priority=1 upgrade '<pkg>*'`
-(dnf accepts a local directory as the `--repofrompath` baseurl) resolves conflicts
-for you instead of a hand-rolled `--rpm` filter.
+A repository-based alternative would make the candidate repository available
+**inside the disposable guest** and let its package solver select packages for
+an explicit install/upgrade goal. Do not run those package-manager operations
+on your development host. This is not currently an azldev input-selection mode:
+adding a custom TMT `prepare` step does not disable azldev's mandatory installation
+of the selected RPMs. For now, pass an explicit compatible subset with `--rpm`.
 
 ## Where plans and tests can live
 
@@ -255,6 +258,8 @@ Otherwise, keep the plan pinned via `source` in the catalog as shown above.
 
 ## See also
 
+- [Test a component in a TMT VM](../how-to/test-component.md) — complete local
+  project, fmf plan, and zlib-ng smoke test
 - [Tests — TMT Fields](../reference/config/tests.md#tmt-fields) — reference for
   the `[tests.<name>.tmt]` subtable
 - [`azldev component test`](../reference/cli/azldev_component_test.md) — run a

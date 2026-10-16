@@ -10,10 +10,14 @@ without enumerating every member.
 ## Test Definition
 
 Each entry under `[tests.<name>]` describes one configuration of one
-runner. Framework-specific options live in a typed subtable
-(`pytest`, `lisa`, `tmt`). azldev validates the fields it consumes for local
-execution; other framework-specific fields are passed through so frameworks
-can evolve independently.
+runner. Framework-specific options live in a subtable (`pytest`, `lisa`, `tmt`).
+azldev validates and consumes the supported fields documented below. Additional
+metadata may be retained for external orchestration; arbitrary keys are not
+automatically forwarded as native framework options.
+
+For complete runnable examples, see [Test a component](../../how-to/test-component.md)
+and [Test an image](../../how-to/test-image.md). For the result format and exit
+status contract, see [Automate artifact tests](../../how-to/automate-artifact-tests.md).
 
 | Field | TOML Key | Type | Required | Description |
 |-------|----------|------|----------|-------------|
@@ -48,8 +52,11 @@ every strategy: unsupported combinations are errors, not silently skipped tests.
 TMT supports all four for components, but an image test cannot use an existing
 SSH target or host in place of actually consuming its subject image.
 
-`base-images` maps `vm`/`container` to specific named images in the selected
-distro version's [published image catalog](distros.md#published-test-artifacts).
+`base-images` maps `vm`/`container` to named supporting images. By default they
+come from the selected distro version's
+[published image catalog](distros.md#published-test-artifacts); CLI
+`--base-image-source local` instead selects local output, building from a local
+recipe if that output is missing.
 It applies only when a component test requires a supporting image; image tests
 use the image under test. CLI `--base-image` overrides the test mapping, which
 overrides the distro version's `test-base-images` defaults.
@@ -69,7 +76,7 @@ VM). It can also run against component packages installed into a supporting VM.
 
 | Field | TOML Key | Type | Description |
 |-------|----------|------|-------------|
-| Source | `source` | table (`git-url`, `ref`) | Git source for the LISA framework. Required for local execution; `ref` must be a full 40-character hex commit SHA. Tests without a `source` are metadata-only and must be run through external LISA orchestration. |
+| Source | `source` | table (`git-url`, `ref`) | Git source for the LISA framework; `ref` must be a full 40-character hex commit SHA. Local execution requires either this source or CLI `--lisa-dir` pointing to a framework checkout. |
 | Criteria | `criteria` | table or array of tables | One or more LISA criteria blocks (`name`, `area`, `category`, `priority`, `tags`) used to select test cases. |
 | Name | `name` | string | Shorthand for a single criteria with a `name` filter. |
 | Testcase name | `testcase-name` | string | Shorthand for a single criteria matching one test case by name. |
@@ -89,6 +96,9 @@ required by the selected framework revision and test collection; Microsoft's
 collection may need `pip-extras = ["libvirt", "azure"]` even when using QEMU.
 The image must support cloud-init on QEMU: Hyper-V-only telemetry configuration
 can produce a genuine cloud-init error and is not silently disabled by azldev.
+See the [LISA walkthrough](../../how-to/test-image.md#boot-and-inspect-the-guest-with-lisa)
+for a pinned framework, a complete guest test, and a targeted QEMU-image
+customization example.
 
 ### TMT Fields
 
@@ -171,7 +181,7 @@ plan = "/plans/example"
 ```
 
 After associating `example-tmt` with a component, run it locally with
-`azldev component test <component> --image-path <image.qcow2> --rpm <package.rpm>`.
+`azldev component test <component> --base-image-path <image.qcow2> --rpm <package.rpm>`.
 
 Prefer `--base-image-path` over the deprecated component `--image-path` alias.
 Use `--execution vm` rather than the deprecated `--provision virtual` spelling,
@@ -200,8 +210,10 @@ arguments.
 | `requirements` | Installs from the private source copy's `requirements.txt`. Errors if the file is not present. |
 | `none` (default) | Uses the caller-prepared environment at `<project-work-dir>/pytest-venv/<test-name>`, preserving main's established location without creating or changing it. Both a valid venv and importable pytest are required; there is no fallback to host Python. |
 
-`--junit-xml` output requested via `azldev image test --junit-xml <path>` is
-appended automatically; do not add it to `extra-args`. Relative CLI paths, including `--junit-xml`, are resolved against the selected
+azldev always requests a private native JUnit report from pytest. The shared
+`--junit-xml <path>` flag additionally writes an aggregate report for all selected
+tests; do not add pytest's native report flag to `extra-args`.
+Relative CLI paths, including `--junit-xml`, are resolved against the selected
 project directory (including `-C`), not the framework's working directory.
 
 Absolute pytest selectors outside the configured working directory remain explicit
