@@ -34,9 +34,6 @@ func TestSnapshots(t *testing.T) {
 		"no-config fix hint":     cmdtest.NewScenarioTest("component", "list", "--all-components").Locally(),
 		"component test help":    cmdtest.NewScenarioTest("component", "test", "--help").Locally(),
 		"image test help":        cmdtest.NewScenarioTest("image", "test", "--help").Locally(),
-		"test help":              cmdtest.NewScenarioTest("test", "--help").Locally(),
-		"test run help":          cmdtest.NewScenarioTest("test", "run", "--help").Locally(),
-		"test list help":         cmdtest.NewScenarioTest("test", "list", "--help").Locally(),
 	}
 
 	for name, test := range tests {

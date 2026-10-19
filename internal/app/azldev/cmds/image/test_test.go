@@ -4,12 +4,15 @@
 package image_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/cmds/image"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/core/testutils"
 	"github.com/microsoft/azure-linux-dev-tools/internal/projectconfig"
+	"github.com/microsoft/azure-linux-dev-tools/internal/testframework"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,9 +57,20 @@ func TestPublishedImageDoesNotRequireLocalRecipe(t *testing.T) {
 	options.EventListener = testEnv.EventListener
 	options.DryRunnable = azldev.NewAppDryRunnable(true)
 	env := azldev.NewEnv(t.Context(), options)
+	env.SetDefaultReportFormat(azldev.ReportFormatJSON)
+
+	var output bytes.Buffer
+	env.SetReportFile(&output)
+
 	cmd := image.NewImageTestCmd()
 	cmd.SetArgs([]string{"published", "--artifact-source", "lkg", "--test", "smoke", "--arch", "x86_64"})
 	require.NoError(t, cmd.ExecuteContext(env))
+
+	var results []testframework.RunResult
+	require.NoError(t, json.Unmarshal(output.Bytes(), &results))
+	require.Len(t, results, 1)
+	assert.Equal(t, "smoke", results[0].Name)
+	assert.Equal(t, testframework.Planned, results[0].Status)
 	assert.Empty(t, testEnv.Config.Images)
 	assert.Empty(t, testEnv.CommandsExecuted, "a dry-run must not build, download, or invoke a framework")
 }

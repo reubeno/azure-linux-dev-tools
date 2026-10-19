@@ -7,13 +7,11 @@ description: {{ printf "%q" .Description }}
 
 **Never install built RPMs on your host** — they target the distro, not your dev
 machine. Use isolated component tests or a chroot with the `azldev-mock` skill.
-`azldev comp build` runs RPM build-time checks; `azldev test run --component <name>` runs
+`azldev comp build` runs RPM build-time checks; `azldev component test <name>` runs
 the separately configured artifact tests.
 
-Use `azldev test list --component <name>` to inspect associated catalog entries,
-or `azldev test list` for the whole catalog. Listing does not discover native
-cases, prepare frameworks, or acquire artifacts. Test selection skips packaging
-lock validation; no experimental mode is needed to test explicit RPMs.
+Test selection skips packaging-lock validation; no experimental mode is needed
+to test explicit RPMs.
 
 ## Build
 
@@ -37,7 +35,7 @@ investigate → modify → render → build → test → inspect
 | Modify | edit the component's `.comp.toml` (see the `azldev-overlays` and `azldev-comp-toml` skills) |
 | Verify | `azldev comp render -p <name>` (fast — skips source tarballs) |
 | Build | `azldev comp build -p <name>` |
-| Test | `azldev test run --component <name>` (or a mock shell for manual debugging) |
+| Test | `azldev component test <name>` (or a mock shell for manual debugging) |
 | Inspect | `azldev comp build -p <name> --preserve-buildenv always`, then a mock shell |
 
 Prefer `comp render` for quick overlay verification; use `comp diff-sources` to see the

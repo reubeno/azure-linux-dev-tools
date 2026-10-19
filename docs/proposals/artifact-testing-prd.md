@@ -4,6 +4,8 @@
 **Baseline:** `upstream/main` at `617a688`; proposal reconstructed from
 `feat/shared-test-execution` at `0db23ee`.
 **Scope:** Customer-visible CLI behavior, configuration, workflows, and results.
+**Scope revision:** The top-level `azldev test` family and catalog enumeration
+are deferred; execution improvements stay on `component test` and `image test`.
 
 For a quick review, start with the [stakeholder brief](artifact-testing-brief.md).
 
@@ -20,7 +22,7 @@ pieces, but do not yet provide one consistent product experience.
 | U3 | As an image maintainer, choose deliberately between existing output, a new build, a published image, and a file supplied by someone else. | Image testing can find existing local output or take a path, but does not offer the proposed reuse-or-build and published-artifact choices. |
 | U4 | As a consumer of published artifacts, run tests without owning the producer's build recipe or packaging sources. | There is no distro-version catalog of published test inputs, and component selection can require packaging-lock consistency even for supplied RPMs. |
 | U5 | As a test author, reuse a test across suitable environments without embedding every image-specific setup requirement in that test. | Supporting-image selection and guest bootstrap policy are not modeled consistently. Some guest accommodations are implicit. |
-| U6 | As a developer or automation client, find the configured tests without triggering downloads, builds, or framework execution. | There is no shared, configuration-only test-listing command. |
+| U6 (deferred) | As a developer or automation client, find the configured tests without triggering downloads, builds, or framework execution. | There is no shared, configuration-only test-listing command. This requirement remains outside the current proposal. |
 | U7 | As a CI owner, distinguish assertion failures from setup errors, skips, and cancellation, and retain useful reports across frameworks. | Existing reporting and execution behavior differ between the component and image commands; there is no common artifact-test result contract. |
 | U8 | As a developer iterating on code or tests, understand what ran and preserve my original files and caller-owned machines. | Input identity, runtime ownership, source overrides, and retained evidence need consistent guarantees across the supported workflows. |
 
@@ -29,11 +31,11 @@ measured customer adoption or survey results.
 
 ## 2. Proposed product outcome
 
-Introduce a shared `azldev test` command family:
+Extend the existing test commands with consistent execution and artifact controls:
 
 ```text
-azldev test list [--component NAME | --image NAME] [--test NAME_OR_GROUP]...
-azldev test run  (--component NAME | --image NAME) [--test NAME_OR_GROUP]... [options]
+azldev component test NAME [--test NAME_OR_GROUP]... [options]
+azldev image test NAME [--test NAME_OR_GROUP]... [options]
 ```
 
 A customer should be able to choose **what to test**, **which tests to run**,
@@ -53,7 +55,7 @@ requirements.
 
 | Concept | Meaning | How the customer selects it |
 |---------|---------|-----------------------------|
-| Subject | The component's binary packages or the image being evaluated | `--component NAME` or `--image NAME` |
+| Subject | The component's binary packages or the image being evaluated | Positional `NAME` in `component test` or `image test` |
 | Named test | One configured framework invocation, potentially containing many native cases | A `[tests.NAME]` entry; selected directly or through a group |
 | Framework | TMT, LISA, or pytest | The test's existing `type` field |
 | Execution strategy | A managed VM, managed container, existing SSH target, or host-side execution | Test defaults or `--execution` |
@@ -72,36 +74,10 @@ and boots a guest to execute its checks.
 
 ## 4. Proposed CLI contract
 
-### 4.1 List configured tests
+### 4.1 Run selected tests
 
-```sh
-azldev test list
-azldev test list --component curl
-azldev test list --image vm-base
-azldev test list --test regression -O json
-```
-
-Without a subject, list the project's named test catalog. With a subject, list
-its associated tests after expanding groups and removing duplicates. Rows expose
-the test name, framework, description when present, and default strategy.
-
-Explicit `--test` selectors replace the subject's associations for that
-invocation. Unknown or ambiguous selectors are errors. A known subject or group
-with no tests returns an empty successful list.
-
-Listing must not fetch test sources, install frameworks, acquire artifacts, or
-execute framework code. It must work without packaging-lock consistency or a
-prepared test runtime. Normal project/configuration validation still applies.
-
-This is **catalog enumeration**, not native case discovery. Listing
-`kernel-regression` does not enumerate every case its framework will collect,
-nor prove that its prerequisites are available. No `discover` subcommand or
-expensive-discovery option is included in this proposal.
-
-### 4.2 Run selected tests
-
-`run` requires exactly one nonempty subject selector. With no `--test`, run the
-subject's associated tests. With explicit selectors, use the named tests/groups
+Each command requires one subject name. With no `--test`, run the subject's
+associated tests. With explicit selectors, use the named tests/groups
 from the project catalog instead. Deduplicate selected tests and reject unknown
 selectors even if another selector is valid.
 
@@ -109,15 +85,15 @@ Execution requires a configured project and a selected, defined default
 distro/version, including when artifact files are supplied explicitly. That
 provides test context; it does not require a local image build recipe.
 
-An empty execution selection is an error, unlike an empty listing. All selected
-named tests are attempted by default; `--fail-fast` prevents subsequent named
-tests from starting after a failure.
+An empty execution selection is an error. All selected named tests are attempted
+by default; `--fail-fast` prevents subsequent named tests from starting after a
+failure.
 
-The shared options are:
+The common and subject-specific controls are:
 
 | Purpose | Options | Proposed behavior |
 |---------|---------|-------------------|
-| Choose subject/tests | `--component`, `--image`, `--test` | One subject; repeatable test/group selectors |
+| Choose subject/tests | Positional subject name, `--test` | One subject; repeatable test/group selectors |
 | Choose subject artifacts | `--artifact-source local\|lkg\|path`, `--rebuild`, `--rpm`, `--image-path` | Select the candidate bytes independently of any supporting image |
 | Choose component base image | `--base-image`, `--base-image-source local\|lkg\|path`, `--base-image-path`, `--rebuild-base-image` | Select a supporting image only when the selected component tests consume one |
 | Choose target execution | `--execution vm\|container\|ssh\|host`, `--arch` | Override configured execution; architecture defaults to the host and accepts `x86_64` or `aarch64` |
@@ -125,9 +101,10 @@ The shared options are:
 | Iterate on test sources | `--source-dir`, `--lisa-dir`, `--plan` | Override TMT/pytest sources, the LISA framework checkout, or the exact TMT plan |
 | Control output/execution | `--work-dir`, `--junit-xml`, `--fail-fast`, global `--dry-run` | Isolated run output, aggregate JUnit, stop-starting policy, and planning without execution |
 
-In the shared command, `--image-path` always means the image **subject** and
-requires `--image`. A component's supporting image uses `--base-image-path`.
-`--rpm` requires a component subject.
+For `image test`, `--image-path` selects the image **subject**. For
+`component test`, prefer `--base-image-path` for the supporting image; the older
+`--image-path` spelling remains a compatibility alias. `--rpm` is available
+only on `component test`.
 
 Framework-specific overrides apply only to matching selected tests. An override
 with no selected consumer is an error. A global strategy override must be
@@ -141,7 +118,7 @@ directory. Source-override and work directories must not overlap.
 test reports. It does not prove that an image boots, dependencies can be
 installed, or native cases can be collected.
 
-### 4.3 Supported execution combinations
+### 4.2 Supported execution combinations
 
 | Framework | Component subject | Image subject | Default strategy |
 |-----------|-------------------|---------------|------------------|
@@ -223,9 +200,8 @@ A maintainer wants to exercise changes to `curl` without changing the base OS at
 the same time:
 
 ```sh
-azldev test list --component curl
-azldev test run --component curl
-azldev test run --component curl --rebuild
+azldev component test curl
+azldev component test curl --rebuild
 ```
 
 The first run reuses existing RPMs or builds them if missing. The second
@@ -236,14 +212,14 @@ To compare with the publisher's approved package build while retaining the same
 tests and supporting-image policy:
 
 ```sh
-azldev test run --component curl --artifact-source lkg
+azldev component test curl --artifact-source lkg
 ```
 
 To deliberately change the supporting image instead:
 
 ```sh
-azldev test run --component curl --base-image vm-base --base-image-source local
-azldev test run --component curl --base-image vm-base --rebuild-base-image
+azldev component test curl --base-image vm-base --base-image-source local
+azldev component test curl --base-image vm-base --rebuild-base-image
 ```
 
 The first reuses/builds the local base; the second forces its rebuild. Neither
@@ -255,7 +231,7 @@ A developer has a candidate RPM and VM image but does not need azldev to produce
 either:
 
 ```sh
-azldev test run --component zlib-ng \
+azldev component test zlib-ng \
   --rpm ./artifacts/zlib-ng-compat.rpm \
   --base-image-path ./artifacts/base.qcow2 \
   --source-dir ./tests/zlib --plan /plans/smoke
@@ -274,7 +250,7 @@ See [Test a component](../user/how-to/test-component.md) for a complete example.
 An image maintainer wants both artifact inspection and live guest tests:
 
 ```sh
-azldev test run --image vm-base --image-path ./candidate.qcow2 \
+azldev image test vm-base --image-path ./candidate.qcow2 \
   --test image-inspection --test lisa-smoke --test image-tmt \
   --junit-xml ./reports/image-tests.xml
 ```
@@ -286,9 +262,9 @@ mixed run, because pytest's strategy is `host`.
 The same tests can target different artifact origins:
 
 ```sh
-azldev test run --image vm-base
-azldev test run --image vm-base --rebuild
-azldev test run --image vm-base --artifact-source lkg
+azldev image test vm-base
+azldev image test vm-base --rebuild
+azldev image test vm-base --artifact-source lkg
 ```
 
 These mean local reuse-or-build, forced local build, and published image,
@@ -301,10 +277,10 @@ See [Test an image](../user/how-to/test-image.md) for complete pytest and LISA e
 For a TMT component test that supports these environments:
 
 ```sh
-azldev test run --component curl --test curl-smoke \
+azldev component test curl --test curl-smoke \
   --execution container --base-image container-base
 
-azldev test run --component curl --test curl-smoke \
+azldev component test curl --test curl-smoke \
   --execution ssh --ssh-host disposable-vm --ssh-user tester \
   --ssh-key ./id_test --ssh-port 2222
 ```
@@ -320,8 +296,8 @@ an isolation feature. Use only designated disposable test systems.
 ### 6.5 Iterate on tests without changing artifact origin
 
 ```sh
-azldev test run --component curl --source-dir ./tests/curl --plan /plans/smoke
-azldev test run --image vm-base --test lisa-smoke --lisa-dir ./lisa
+azldev component test curl --source-dir ./tests/curl --plan /plans/smoke
+azldev image test vm-base --test lisa-smoke --lisa-dir ./lisa
 ```
 
 These change the test/framework sources, not which candidate packages or image
@@ -333,7 +309,7 @@ Configured Git sources remain pinned to full commits for reproducible runs.
 Use a unique absolute output directory for each invocation:
 
 ```sh
-azldev -C /workspace/project test run --image vm-base \
+azldev -C /workspace/project image test vm-base \
   --image-path /workspace/artifacts/candidate.qcow2 \
   --work-dir /ci/artifacts/run-123/work \
   --junit-xml /ci/artifacts/run-123/junit.xml
@@ -352,7 +328,7 @@ See [Automate artifact tests](../user/how-to/automate-artifact-tests.md).
 | Configuration surface | Change |
 |-----------------------|--------|
 | `[tests.NAME]`, framework `type` and subtables | Existing; retain the catalog and framework-native configuration |
-| `[test-groups.NAME]` and component/image `tests.tests` references | Existing; use consistently in listing and execution |
+| `[test-groups.NAME]` and component/image `tests.tests` references | Existing; use consistently in both execution commands |
 | `[tests.NAME.execution]` | Add `strategy` and strategy-to-image-name `base-images` defaults |
 | `[distros.D.versions.V.images.NAME]` | Add published image variants indexed by architecture, plus optional image test defaults |
 | `[distros.D.versions.V.test-base-images]` | Add default supporting image names for `vm` and `container` |
@@ -465,7 +441,7 @@ or introduce fallback between artifact origins.
 For component tests, `--base-image-path FILE` alone has no image identity.
 `--base-image vm-base --base-image-path FILE` explicitly associates the file.
 An image subject is already explicitly named by
-`--image vm-base --image-path FILE`.
+`image test vm-base --image-path FILE`.
 
 Bootstrap commands run in the disposable TMT guest before readiness checks,
 not on the host and not by modifying the original disk image. They do not apply
@@ -583,10 +559,10 @@ Early configuration errors, forced termination, or unwritable output storage can
 prevent reports from being created. Missing reports are not evidence of success.
 The exit status remains authoritative even if recorded cases passed.
 
-`test list -O json` provides a structured catalog listing. For execution,
-`-O json` formats the final result but does not reserve stdout exclusively for
-JSON; native framework output may share it. A dedicated `--results-json` option
-is deferred. CI should use a unique work root and consume the retained file.
+For execution, `-O json` formats the final result but does not reserve stdout
+exclusively for JSON; native framework output may share it. A dedicated
+`--results-json` option is deferred. CI should use a unique work root and consume
+the retained file.
 
 ### 8.3 Ownership and prerequisites
 
@@ -617,20 +593,19 @@ artifact, not silently alter the original or suppress provisioning failures.
 ## 9. Compatibility and behavior changes
 
 The existing `azldev component test NAME` and `azldev image test NAME` entry points
-remain supported. New documentation should lead with `azldev test run`.
+remain the supported interfaces. No top-level testing family or replacement
+subject-selector flags are introduced.
 
 | Existing spelling | Proposed preferred spelling |
 |-------------------|-----------------------------|
-| `component test NAME` | `test run --component NAME` |
-| `image test NAME` | `test run --image NAME` |
 | Image `--test-suite NAME` | `--test NAME` |
 | Component `--image-path FILE` | `--base-image-path FILE` |
 | Component `--provision virtual` | `--execution vm` |
 | Component `--provision local` | `--execution host` |
 | Deprecated component `--from-spec` | `--source-dir` pointing to the prepared/rendered fmf tree |
 
-Legacy component-only aliases stay on the legacy component command; they do not
-change the meaning of `test run --image-path`.
+Component-only aliases stay on the component command; `image test --image-path`
+continues to mean the subject image.
 
 Keeping the entry points does **not** mean every existing invocation has
 unchanged behavior. Stakeholders must review these changes:
@@ -643,7 +618,7 @@ unchanged behavior. Stakeholders must review these changes:
 | Older build output | Output without sufficient component/architecture identity may require explicit paths or a new build rather than automatic reuse. |
 | Component test selection | Explicit selectors can select project-wide test/group names, not just filter associated TMT names. Unsupported combinations and unknown selectors are errors. |
 | Failure continuation | Component execution no longer stops after the first named test by default; request `--fail-fast` for that behavior. |
-| Empty image test selection | Previously a warning with success; now an execution error. Empty `test list` remains successful. |
+| Empty image test selection | Previously a warning with success; now an execution error. |
 | Paths/output | Component test output defaults to the project's work directory rather than the caller's current directory. Relative image-test/JUnit paths consistently use the selected project. |
 | Runtime/source ownership | Managed runtimes and source copies are private to a run; scripts must not depend on old reusable runtime directories. The established pytest `install=none` location remains supported. |
 | Guest bootstrap | Implicit account/firewall accommodations are removed. Declare needed commands on a named image or test. |
@@ -665,7 +640,7 @@ structure.
 
 | ID | Requirement | Observable acceptance |
 |----|-------------|-----------------------|
-| A1 | U1, U6 | The shared command lists catalog entries or subject associations and expands groups without running frameworks or acquiring inputs. An empty list succeeds; unknown selectors fail. |
+| A1 | U1 | Both existing commands resolve associated or explicitly selected tests/groups, deduplicate selections, and reject unknown selectors and empty execution selections. |
 | A2 | U1, U5 | Supported LISA, TMT, and pytest tests run for their supported subject/strategy combinations. Unsupported selections fail rather than being silently omitted. |
 | A3 | U2, U3 | Default subject reuse, missing-output builds, and forced rebuilds are distinguishable. Supporting-image origin can change without changing subject origin. |
 | A4 | U3, U4 | A named published image can be consumed without a local recipe. Missing catalog variants fail explicitly; no silent local/LKG fallback occurs. |
@@ -675,13 +650,16 @@ structure.
 | A8 | U7 | Multiple selected tests retain their individual evidence and contribute to aggregate JUnit. Fail-fast distinguishes unstarted tests from passing ones; missing reports cannot produce a false successful CI interpretation. |
 | A9 | U8 | A concurrent rebuild does not replace the bytes an active test consumes. Original artifacts and managed source trees remain unchanged; reports identify the consumed inputs. |
 | A10 | U8 | Managed resources receive normal/graceful cleanup, while caller-owned SSH machines and prepared pytest environments remain caller-owned. |
-| A11 | U6, U7 | Listing JSON is independently consumable. Execution automation has a documented retained-file workflow that does not assume stdout contains only JSON. |
-| A12 | U1-U8 | The retained commands/aliases, changed defaults, prerequisite boundaries, and complete component/image/CI walkthroughs are documented together. |
+| A11 | U7 | Execution automation has a documented retained-file workflow that does not assume stdout contains only JSON. |
+| A12 | U1-U5, U7-U8 | The retained commands/aliases, changed defaults, prerequisite boundaries, and complete component/image/CI walkthroughs are documented together. |
 
 ## 11. Scope limits and deferred requirements
 
 The initial scope does not include:
 
+- A top-level `azldev test` command family or configuration-only catalog
+  enumeration (U6). Customers can inspect existing test definitions and
+  associations in their project configuration.
 - Dynamic enumeration of native cases, including discovery that conditionally
   fetches sources, installs runtimes, acquires artifacts, or provisions guests.
 - A dedicated `--results-json` destination or distinct process exit codes for
@@ -702,7 +680,7 @@ The initial scope does not include:
 The architecture flag accepts `x86_64` and `aarch64`, but this proposal does not
 claim a complete native qualification matrix for every format/architecture pair.
 VM availability, framework setup, and network access also preclude a universal
-execution-time guarantee. The firm low-cost boundary is configuration-only listing.
+execution-time guarantee.
 
 ## 12. Stakeholder decisions requested
 
@@ -714,8 +692,9 @@ The proposal asks stakeholders to approve the customer contract above, particula
    overrides affecting both local and published runs.
 3. **Safety and migration:** the execution/ownership boundaries and behavior
    changes in section 9, including lock validation and explicit guest bootstrap.
-4. **First-release boundaries:** cheap catalog listing now, with dynamic
-   discovery and a dedicated JSON report destination deferred.
+4. **First-release boundaries:** improve the existing test verbs now; defer a
+   top-level test family, catalog enumeration, dynamic discovery, and a dedicated
+   JSON report destination.
 
 Reviewers should distinguish disagreements with these product choices from
 requests to expand the deferred scope. Neither requires discussion of internal

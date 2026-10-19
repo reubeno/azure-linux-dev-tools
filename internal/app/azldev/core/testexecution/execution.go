@@ -56,21 +56,6 @@ type plannedTest struct {
 func Select(cfg *projectconfig.ProjectConfig, associated []projectconfig.ResolvedTest,
 	selectors []string,
 ) ([]projectconfig.ResolvedTest, error) {
-	tests, err := selectTests(cfg, associated, selectors)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(tests) == 0 {
-		return nil, errors.New("no tests selected for this subject")
-	}
-
-	return tests, nil
-}
-
-func selectTests(cfg *projectconfig.ProjectConfig, associated []projectconfig.ResolvedTest,
-	selectors []string,
-) ([]projectconfig.ResolvedTest, error) {
 	tests := associated
 
 	if len(selectors) > 0 {
@@ -90,6 +75,10 @@ func selectTests(cfg *projectconfig.ProjectConfig, associated []projectconfig.Re
 			result = append(result, test)
 			seen[test.Name] = true
 		}
+	}
+
+	if len(result) == 0 {
+		return nil, errors.New("no tests selected for this subject")
 	}
 
 	return result, nil

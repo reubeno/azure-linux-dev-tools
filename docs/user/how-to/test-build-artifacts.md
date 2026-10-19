@@ -1,7 +1,7 @@
 # Test build artifacts
 
-Use `azldev test run --component NAME` for a component's binary packages, and
-`azldev test run --image NAME` for an image. Both forms select configured tests
+Use `azldev component test NAME` for a component's binary packages, and
+`azldev image test NAME` for an image. Both forms select configured tests
 from the same `[tests]` / `[test-groups]` catalog and use the same LISA, TMT,
 and pytest adapters.
 
@@ -11,25 +11,10 @@ For CI, see [Automate artifact tests](automate-artifact-tests.md).
 The examples on this page assume an existing project with named subjects and
 associated tests; paths alone do not replace that configuration.
 
-## List configured tests
-
-```sh
-azldev test list
-azldev test list --component curl
-azldev test list --image vm-base
-azldev test list --test regression -O json
-```
-
-Without a subject, `list` shows the whole named test catalog. With a subject, it
-expands that subject's test/group associations and removes duplicates. Explicit
-`--test` selectors replace those associations, matching `run`. An empty list is
-successful; an unknown subject or selector is an error.
-
-Listing reads configuration only. It does not clone test sources, install
-frameworks, acquire artifacts, or execute framework code. Each row is a named
-configured invocation, not an individual framework case. Dynamic discovery is
-not implemented. Component test selection and listing do not require packaging
-lock consistency; they do not opt into `--without-lockfile`.
+Catalog enumeration and dynamic native-case discovery are deferred. Inspect
+the project's `[tests]`, `[test-groups]`, and subject associations to see its
+configured tests. Component test selection does not require packaging-lock
+consistency and does not opt into `--without-lockfile`.
 The test command also skips that initial consistency check when it falls back
 to building missing packages. `azldev component build` retains its normal
 validation; run it first when you need that check before testing.
@@ -51,10 +36,10 @@ normal build/test concurrency and accidental writes, not hostile code running
 with the same user privileges.
 
 ```sh
-azldev test run --component curl
-azldev test run --component curl --rebuild
-azldev test run --image vm-base
-azldev test run --image vm-base --rebuild
+azldev component test curl
+azldev component test curl --rebuild
+azldev image test vm-base
+azldev image test vm-base --rebuild
 ```
 
 Supporting VM/container images default to published LKG artifacts declared in
@@ -66,21 +51,21 @@ Subject and supporting-image overrides are independent:
 
 ```sh
 # Local subject, explicitly chosen supporting image
-azldev test run --component curl --base-image vm-base
+azldev component test curl --base-image vm-base
 
 # Reuse a local supporting image, building it if missing
-azldev test run --component curl --base-image vm-base --base-image-source local
+azldev component test curl --base-image vm-base --base-image-source local
 
 # Rebuild the supporting image using this project's recipe
-azldev test run --component curl --base-image vm-base --rebuild-base-image
+azldev component test curl --base-image vm-base --rebuild-base-image
 
 # Explicit on-disk inputs; no implicit package/image build
-azldev test run --component curl --rpm './out/curl*.rpm' --base-image-path ./base.qcow2
-azldev test run --image vm-base --image-path ./base.qcow2
+azldev component test curl --rpm './out/curl*.rpm' --base-image-path ./base.qcow2
+azldev image test vm-base --image-path ./base.qcow2
 
 # Explicitly test published subjects instead of local changes
-azldev test run --component curl --artifact-source lkg
-azldev test run --image vm-base --artifact-source lkg
+azldev component test curl --artifact-source lkg
+azldev image test vm-base --artifact-source lkg
 ```
 
 LKG base-image downloads work without a local recipe. Rebuilding a base image
@@ -104,9 +89,9 @@ files through the input manifest rather than installing RPMs on the host.
 | pytest | Host-side artifact inspection | Host-side artifact inspection |
 
 ```sh
-azldev test run --component curl --execution container
-azldev test run --component curl --execution ssh --ssh-host disposable-vm --ssh-user tester --ssh-key ./id_test
-azldev test run --component curl --execution host
+azldev component test curl --execution container
+azldev component test curl --execution ssh --ssh-host disposable-vm --ssh-user tester --ssh-key ./id_test
+azldev component test curl --execution host
 ```
 
 Host execution can install packages and modify the machine. TMT host execution
@@ -135,7 +120,7 @@ local and LKG artifacts does not switch policy. Lists replace rather than append
 A component's `--base-image-path` alone is anonymous: it does not inherit the name
 or defaults of the test/distro's usual base image. Add `--base-image vm-base` to
 explicitly associate that file with the named image. An image subject is already
-explicitly named by `--image NAME`. The selected bootstrap origin is logged and
+explicitly named by `image test NAME`. The selected bootstrap origin is logged and
 recorded as `tmtBootstrapSource` in the input manifest.
 
 ## Override test sources
@@ -151,8 +136,8 @@ only to the corresponding tests. An override with no applicable selected test
 is an error rather than being silently ignored.
 
 ```sh
-azldev test run --component curl --source-dir ./prepared/curl --plan /plans/all
-azldev test run --image vm-base --lisa-dir ./lisa --test boot-smoke
+azldev component test curl --source-dir ./prepared/curl --plan /plans/all
+azldev image test vm-base --lisa-dir ./lisa --test boot-smoke
 ```
 
 Keep source and work directories separate. Configured Git sources are pinned
@@ -162,8 +147,8 @@ a checkout-relative `working-dir`.
 ## Select tests and inspect results
 
 ```sh
-azldev test run --component curl --test smoke --test regression --junit-xml ./results.xml
-azldev test run --image vm-base --test boot-smoke --fail-fast
+azldev component test curl --test smoke --test regression --junit-xml ./results.xml
+azldev image test vm-base --test boot-smoke --fail-fast
 ```
 
 Selectors accept either test names or test-group names. Duplicates are run once;
@@ -235,9 +220,8 @@ nonzero. Early configuration errors may produce no results file, and native
 output can share stdout with `-O json`. Use a unique work root and consume the
 retained JSON as shown in [Automate artifact tests](automate-artifact-tests.md).
 
-The older `azldev component test NAME` and `azldev image test NAME` commands remain
-supported. Only the legacy component command accepts `--image-path` as an alias
-for `--base-image-path`, and `--provision virtual/local` for `--execution vm/host`.
-For `test run`, `--image-path` always means the subject image and requires
-`--image`; supporting images use `--base-image-path`. The old `--test-suite`
-flag remains an alias for `--test`. Existing TOML framework definitions remain supported.
+For `image test`, `--image-path` selects the subject image. For `component test`,
+prefer `--base-image-path`; its older `--image-path` spelling remains an alias.
+Component `--provision virtual/local` remains an alias for `--execution vm/host`.
+The old `--test-suite` flag remains an alias for `--test`.
+Existing TOML framework definitions remain supported.

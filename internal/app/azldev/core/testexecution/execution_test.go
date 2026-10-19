@@ -43,9 +43,21 @@ func TestSelectorsRejectEveryUnknownAndDedupe(t *testing.T) {
 	tests, err := testexecution.Select(&cfg, nil, []string{"one", "group"})
 	require.NoError(t, err)
 	require.Len(t, tests, 1)
+	assert.Equal(t, "one", tests[0].Name)
+
+	tests, err = testexecution.Select(&cfg, associated, []string{"group"})
+	require.NoError(t, err)
+	require.Len(t, tests, 1)
+	assert.Equal(t, "one", tests[0].Name, "explicit groups replace subject associations")
 
 	_, err = testexecution.Select(&cfg, nil, []string{"one", "missing"})
 	require.ErrorContains(t, err, "unknown test selector")
+	_, err = testexecution.Select(&cfg, nil, nil)
+	require.ErrorContains(t, err, "no tests selected")
+
+	cfg.TestGroups["empty"] = projectconfig.TestGroup{}
+	_, err = testexecution.Select(&cfg, associated, []string{"empty"})
+	require.ErrorContains(t, err, "no tests selected")
 }
 
 func TestPreflightPrecedesArtifactBuild(t *testing.T) {

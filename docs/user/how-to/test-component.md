@@ -130,7 +130,7 @@ Azure Linux checkout; adjust the release filename to your build:
 RPM="$HOME/src/azurelinux/base/out/rpms/rpm-base/zlib-ng-compat-2.3.3-6.azl4.x86_64.rpm"
 BASE_IMAGE="/absolute/path/to/azurelinux-4.x86_64.qcow2"
 
-azldev test run --component zlib-ng \
+azldev component test zlib-ng \
   --execution vm --arch x86_64 \
   --rpm "$RPM" \
   --base-image-path "$BASE_IMAGE" \
@@ -164,14 +164,14 @@ With an existing `vm-base` image definition and associated test:
 
 ```sh
 # Reuse local RPMs, building them if missing; fetch the published base image.
-azldev test run --component zlib-ng --base-image vm-base --source-dir tests/zlib
+azldev component test zlib-ng --base-image vm-base --source-dir tests/zlib
 
 # Reuse a local base image too, building it from the local recipe if missing.
-azldev test run --component zlib-ng --base-image vm-base \
+azldev component test zlib-ng --base-image vm-base \
   --base-image-source local --source-dir tests/zlib
 
 # Force a new component build, without rebuilding the published base.
-azldev test run --component zlib-ng --rebuild --base-image vm-base --source-dir tests/zlib
+azldev component test zlib-ng --rebuild --base-image vm-base --source-dir tests/zlib
 ```
 
 These examples require the project's real build configuration or

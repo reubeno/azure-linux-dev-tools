@@ -120,14 +120,14 @@ cloud-init-runcmds = [
 ```
 
 This metadata needs no local build recipe. It applies to both
-`azldev test run --image vm-base` and component tests using `--base-image vm-base`.
+`azldev image test vm-base` and component tests using `--base-image vm-base`.
 It does not run for LISA, pytest, or TMT host/container/SSH execution, and it does
 not modify the original image file.
 
 A component's explicit `--base-image-path` is anonymous unless accompanied by
 `--base-image NAME`. Test/distro base-image mappings do not supply an implicit
 identity for an arbitrary file. An explicitly named image subject
-(`--image NAME --image-path FILE`) uses that name's defaults.
+(`image test NAME --image-path FILE`) uses that name's defaults.
 The existing per-test `tmt.cloud-init-runcmds` remains usable for anonymous files.
 
 ## Image Publish

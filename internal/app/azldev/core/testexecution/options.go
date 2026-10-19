@@ -124,12 +124,6 @@ func RegisterFlags(cmd *cobra.Command, options *Options, component bool) {
 	}
 }
 
-// RegisterRunFlags exposes both subject kinds without the legacy component image-path alias.
-func RegisterRunFlags(cmd *cobra.Command, options *Options) {
-	RegisterFlags(cmd, options, false)
-	registerComponentFlags(cmd, options)
-}
-
 func registerComponentFlags(cmd *cobra.Command, options *Options) {
 	flags := cmd.Flags()
 	flags.StringSliceVarP(&options.RPMPaths, "rpm", "r", nil,

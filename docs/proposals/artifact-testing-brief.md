@@ -9,28 +9,23 @@ regardless of the test framework or where the artifacts were built.
 
 Upstream currently splits that experience: component testing runs TMT, while
 image testing runs LISA and pytest but rejects TMT. Package testing requires
-explicit RPMs and, for VM runs, an explicit image. Customers also lack shared controls for
-local versus published inputs, inexpensive test listing, and consistent CI
-results.
+explicit RPMs and, for VM runs, an explicit image. Customers also lack shared
+controls for local versus published inputs and consistent CI results.
 
 ## Proposed experience
 
-Introduce a shared `azldev test` family:
+Make the existing `component test` and `image test` verbs consistent:
 
 ```sh
-azldev test list --component curl
-azldev test run --component curl --rebuild
-azldev test run --image vm-base --artifact-source lkg
-azldev test run --image vm-base --image-path ./candidate.qcow2 --junit-xml results.xml
+azldev component test curl --rebuild
+azldev image test vm-base --artifact-source lkg
+azldev image test vm-base --image-path ./candidate.qcow2 --junit-xml results.xml
 ```
 
-`list` shows the existing named test catalog, optionally filtered by component
-or image. It does not download inputs, prepare frameworks, or discover individual
-native cases.
-
-`run` selects one component or image. It runs associated tests by default;
+Each command names one component or image and runs associated tests by default;
 `--test NAME_OR_GROUP` selects explicit tests/groups instead. The existing TOML
-test catalog and native test languages remain in use.
+test catalog and native test languages remain in use. A separate top-level test
+family and catalog enumeration are deferred.
 
 Both artifact kinds gain access to TMT, LISA, and pytest within their supported
 environments. LISA uses VMs; pytest inspects artifacts on the host, without
@@ -97,11 +92,12 @@ so automation should read the retained `results.json` in a unique work directory
 
 ## Review decisions and scope
 
-Approve the shared CLI, local-subject/LKG-base defaults, shared-name image policy,
-and documented migration effects. Success means predictable input selection and
-usable results across the three frameworks.
+Approve consistent behavior across the existing verbs, local-subject/LKG-base
+defaults, shared-name image policy, and documented migration effects. Success
+means predictable input selection and usable results across the three frameworks.
 
-**Deferred:** dynamic native-case discovery, `--results-json`, projectless
-execution, automatic conflict-aware RPM selection, and cloud/SKU orchestration.
+**Deferred:** a top-level test command family, catalog enumeration, dynamic
+native-case discovery, `--results-json`, projectless execution, automatic
+conflict-aware RPM selection, and cloud/SKU orchestration.
 The [full PRD](artifact-testing-prd.md) contains detailed syntax, schema examples,
 compatibility changes, and acceptance criteria.

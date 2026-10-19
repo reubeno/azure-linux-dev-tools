@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSharedTestCatalogAndExplicitRun(t *testing.T) {
+func TestArtifactTestCommandsPreserveImageDefaults(t *testing.T) {
 	t.Parallel()
 
 	config := []string{
@@ -42,16 +42,13 @@ func TestSharedTestCatalogAndExplicitRun(t *testing.T) {
 	for _, testcase := range []struct {
 		name string
 		args []string
-		run  bool
+		namedBase bool
 	}{
-		{"catalog", []string{"test", "list"}, false},
-		{"component", []string{"test", "list", "--component", "pkg"}, false},
-		{"image", []string{"test", "list", "--image", "base"}, false},
-		{"run-component", []string{"test", "run", "--component", "pkg", "--rpm", "pkg.rpm",
+		{"component", []string{"component", "test", "pkg", "--rpm", "pkg.rpm",
 			"--base-image", "base", "--base-image-path", "base.qcow2", "--dry-run"}, true},
-		{"run-image", []string{"test", "run", "--image", "base", "--image-path", "base.qcow2", "--dry-run"}, true},
-		{"legacy-component", []string{"component", "test", "pkg", "--rpm", "pkg.rpm",
-			"--base-image-path", "base.qcow2", "--dry-run"}, true},
+		{"image", []string{"image", "test", "base", "--image-path", "base.qcow2", "--dry-run"}, true},
+		{"anonymous-component-base", []string{"component", "test", "pkg", "--rpm", "pkg.rpm",
+			"--base-image-path", "base.qcow2", "--dry-run"}, false},
 	} {
 		t.Run(testcase.name, func(t *testing.T) {
 			t.Parallel()
@@ -70,13 +67,11 @@ func TestSharedTestCatalogAndExplicitRun(t *testing.T) {
 			require.Len(t, rows, 1)
 			assert.Equal(t, "smoke", rows[0]["name"])
 			assert.Equal(t, "tmt", rows[0]["framework"])
-			if testcase.run {
-				assert.Equal(t, "planned", rows[0]["status"])
-				if testcase.name != "legacy-component" {
-					assert.Contains(t, results.Stderr, "project-image:base")
-				}
+			assert.Equal(t, "planned", rows[0]["status"])
+			if testcase.namedBase {
+				assert.Contains(t, results.Stderr, "project-image:base")
 			} else {
-				assert.NotContains(t, rows[0], "status")
+				assert.NotContains(t, results.Stderr, "project-image:base")
 			}
 		})
 	}

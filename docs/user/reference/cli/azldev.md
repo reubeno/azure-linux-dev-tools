@@ -44,6 +44,5 @@ lives), or use -C to point to one.
 * [azldev package](azldev_package.md)	 - Manage binary package configuration
 * [azldev project](azldev_project.md)	 - Manage Azure Linux projects
 * [azldev repo](azldev_repo.md)	 - Inspect and manage RPM repositories
-* [azldev test](azldev_test.md)	 - List configured tests and run them against build artifacts
 * [azldev version](azldev_version.md)	 - Print the CLI version
 

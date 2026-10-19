@@ -20,7 +20,6 @@ import (
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/cmds/pkg"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/cmds/project"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/cmds/repo"
-	testcmd "github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/cmds/test"
 	"github.com/microsoft/azure-linux-dev-tools/internal/app/azldev/cmds/version"
 )
 
@@ -66,7 +65,6 @@ func InstantiateAppForArgs(args []string) *azldev.App {
 	pkg.OnAppInit(app)
 	project.OnAppInit(app)
 	repo.OnAppInit(app)
-	testcmd.OnAppInit(app)
 	version.OnAppInit(app)
 
 	return app

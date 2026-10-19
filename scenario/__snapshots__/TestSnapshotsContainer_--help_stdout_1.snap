@@ -17,7 +17,6 @@ Primary commands:
   package     Manage binary package configuration
   project     Manage Azure Linux projects
   repo        Inspect and manage RPM repositories
-  test        List configured tests and run them against build artifacts
 
 Meta commands:
   completion  Generate the autocompletion script for the specified shell

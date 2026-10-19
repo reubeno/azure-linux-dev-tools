@@ -12,16 +12,14 @@ own its schema.
 
 ## Commands
 
-Image-family commands select images by **name as a positional argument** (not
-`-p`). The shared testing commands instead use `--image <name>`.
+Images are selected by their **name as a positional argument** (not `-p`).
 
 | Task | Command |
 | --- | --- |
 | List images | `azldev image list` |
 | Build an image (kiwi-ng) | `azldev image build <name>` |
 | Boot an image in a QEMU VM | `azldev image boot <name>` |
-| Run an image's tests | `azldev test run --image <name>` |
-| List an image's configured tests | `azldev test list --image <name>` |
+| Run an image's tests | `azldev image test <name>` |
 | Customize a pre-built image | `azldev image customize` |
 
 `azldev image build` takes `--local-repo` / `--remote-repo` to add package sources and
@@ -33,7 +31,7 @@ explicit `--image-path` / `--iso`. Confirm current flags with
 
 ## Registering an image
 
-`azldev test run --image <name>` reuses local build output, building when missing.
+`azldev image test <name>` reuses local build output, building when missing.
 `--rebuild` forces a build, `--artifact-source lkg` consumes the distro version's
 published image, and `--image-path` selects an explicit file. Artifact age is
 logged without claiming freshness. Use `--test` for a test/group selector and
@@ -64,10 +62,6 @@ These defaults apply only to managed TMT VMs, not LISA, pytest, host, container,
 or existing SSH targets. azldev does not automatically create a `fedora` account
 or open guest firewall ports. Session-mode testcloud readiness uses TCP 10022.
 Managed VM artifact collection uses remote sudo without changing guest permissions.
-
-`azldev test list` reads the configured catalog, not native test cases; it does
-not prepare environments or fetch artifacts. Dynamic discovery is not implemented.
-The older `azldev image test <name>` remains supported.
 
 Published images live under
 `[distros.<distro>.versions.<version>.images.<name>.architectures]`, independently

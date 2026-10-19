@@ -92,7 +92,7 @@ Set `IMAGE` to your existing disk image and run:
 
 ```sh
 IMAGE="/absolute/path/to/azurelinux-4.x86_64.qcow2"
-azldev test run --image candidate --image-path "$IMAGE" \
+azldev image test candidate --image-path "$IMAGE" \
   --arch x86_64 --junit-xml image-bytes.xml
 ```
 
@@ -160,7 +160,7 @@ class ImageSmoke(TestSuite):
 Run the explicitly selected test:
 
 ```sh
-azldev test run --image candidate --image-path "$IMAGE" \
+azldev image test candidate --image-path "$IMAGE" \
   --arch x86_64 --test image-boot --lisa-dir tools/lisa \
   --junit-xml image-boot.xml
 ```
@@ -181,7 +181,7 @@ full commit SHA instead of relying on an uncommitted local file.
 Run both checks together by repeating the selector:
 
 ```sh
-azldev test run --image candidate --image-path "$IMAGE" --arch x86_64 \
+azldev image test candidate --image-path "$IMAGE" --arch x86_64 \
   --test image-bytes --test image-boot --lisa-dir tools/lisa \
   --junit-xml image-tests.xml
 ```
@@ -241,7 +241,7 @@ azldev image customize --image-file "$IMAGE" \
   --image-config "$PWD/qemu-config/config.yaml" \
   --output-image-format qcow2 --output-path "$PWD/out/qemu-test.qcow2"
 
-azldev test run --image candidate --image-path out/qemu-test.qcow2 \
+azldev image test candidate --image-path out/qemu-test.qcow2 \
   --arch x86_64 --test image-boot --lisa-dir tools/lisa \
   --junit-xml image-boot-qemu.xml
 ```
@@ -278,7 +278,7 @@ cloud-init-runcmds = [
 ```
 
 ```sh
-azldev test run --image candidate --image-path "$IMAGE" --arch x86_64 \
+azldev image test candidate --image-path "$IMAGE" --arch x86_64 \
   --test image-tmt --source-dir tests/image-tmt
 ```
 
@@ -291,9 +291,9 @@ image tests, not a qcow2 disk.
 In a project with real image recipes and test associations:
 
 ```sh
-azldev test run --image vm-base                  # reuse a local image, build if missing
-azldev test run --image vm-base --rebuild        # always build before testing
-azldev test run --image vm-base --artifact-source lkg
+azldev image test vm-base                  # reuse a local image, build if missing
+azldev image test vm-base --rebuild        # always build before testing
+azldev image test vm-base --artifact-source lkg
 ```
 
 The LKG form requires the distro's

@@ -1,6 +1,6 @@
 # Automate artifact tests
 
-Use the same `test run --component` and `test run --image` commands in CI as locally.
+Use the same `component test` and `image test` commands in CI as locally.
 Preserve the command's exit status, save an aggregate JUnit report, and read the
 retained `results.json` for detailed outcomes. Do not infer success from the
 presence of a report, or from the last line printed by a native framework.
@@ -21,7 +21,7 @@ mkdir -p ci-artifacts
 RUN_DIR="$(mktemp -d "$(pwd)/ci-artifacts/image-test.XXXXXX")"
 
 status=0
-azldev -C "$PROJECT" test run --image candidate \
+azldev -C "$PROJECT" image test candidate \
   --test image-bytes --image-path "$IMAGE" --arch x86_64 \
   --work-dir "$RUN_DIR/work" \
   --junit-xml "$RUN_DIR/junit.xml" \
