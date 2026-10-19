@@ -5,6 +5,8 @@
 `feat/shared-test-execution` at `0db23ee`.
 **Scope:** Customer-visible CLI behavior, configuration, workflows, and results.
 
+For a quick review, start with the [stakeholder brief](artifact-testing-brief.md).
+
 ## 1. Unmet customer requirements
 
 Customers need to test the packages and images they produce without rebuilding

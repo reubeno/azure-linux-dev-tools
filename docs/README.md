@@ -12,5 +12,7 @@ implementation of `azldev`.
 
 ## Proposals
 
+- [Artifact testing stakeholder brief](./proposals/artifact-testing-brief.md):
+  a short overview of the customer need, proposed experience, and review decisions.
 - [Consistent artifact testing PRD](./proposals/artifact-testing-prd.md): draft
   customer requirements, CLI workflows, and configuration changes for stakeholder review.
