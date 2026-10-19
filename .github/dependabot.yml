@@ -63,19 +63,6 @@ updates:
         patterns:
           - "*"
 
-  # Scenario container base images (matches the upstream image-build harness).
-  - package-ecosystem: "docker"
-    directory: "/scenario/docker"
-    schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 7
-    groups:
-      dependabot-scenario-containers:
-        applies-to: version-updates
-        patterns:
-          - "*"
-
   # Native pytest integration fixture
   - package-ecosystem: "pip"
     directory: "/scenario/testdata/frameworks/source/pytest"
