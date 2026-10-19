@@ -9,3 +9,8 @@ users of `azldev`.
 
 The [Developer Guide](./developer) is intended for developers contributing to the
 implementation of `azldev`.
+
+## Proposals
+
+- [Consistent artifact testing PRD](./proposals/artifact-testing-prd.md): draft
+  customer requirements, CLI workflows, and configuration changes for stakeholder review.
