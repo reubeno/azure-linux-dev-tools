@@ -8,9 +8,8 @@ Package and image maintainers need one predictable way to test their artifacts,
 regardless of the test framework or where the artifacts were built.
 
 Upstream currently splits that experience: component testing runs TMT, while
-image testing runs LISA and pytest but rejects TMT. Package testing requires
-explicit RPMs and, for VM runs, an explicit image. Customers also lack shared
-controls for local versus published inputs and consistent CI results.
+image testing runs LISA and pytest but rejects TMT. Artifact selection and CI
+results also lack consistent controls.
 
 ## Proposed experience
 
@@ -22,15 +21,27 @@ azldev image test vm-base --artifact-source lkg
 azldev image test vm-base --image-path ./candidate.qcow2 --junit-xml results.xml
 ```
 
-Each command names one component or image and runs associated tests by default;
-`--test NAME_OR_GROUP` selects explicit tests/groups instead. The existing TOML
-test catalog and native test languages remain in use. A separate top-level test
-family and catalog enumeration are deferred.
+## Separable test choices
 
-Both artifact kinds gain access to TMT, LISA, and pytest within their supported
-environments. LISA uses VMs; pytest inspects artifacts on the host, without
-booting them. TMT supports VM/container image tests and additionally SSH/host
-component tests. Unsupported combinations are errors, not silently skipped work.
+Choose each dimension independently, within supported framework combinations:
+
+| Choice | Default | Customer controls |
+|--------|---------|-------------------|
+| **Subject:** what is being evaluated | Explicitly named | `component test curl` tests RPMs; `image test vm-base` tests an image |
+| **Tests:** which checks to run | The subject's associated tests/groups | `--test NAME_OR_GROUP` replaces that selection |
+| **Framework:** how checks are expressed | Declared by each named test | `[tests.NAME].type = "tmt"`, `"lisa"`, or `"pytest"` |
+| **Execution:** where checks run | The test's `execution.strategy`, otherwise VM for TMT/LISA and host for pytest | `--execution vm`, `container`, `ssh`, or `host`, where supported |
+| **Architecture:** which target variant | Host architecture | `--arch x86_64` or `--arch aarch64` |
+| **Test source:** where test code comes from | Configured pinned repository or local pytest directory | `--source-dir` for TMT/pytest; `--lisa-dir` for a local LISA checkout |
+| **Image identity:** which logical image | Image subject name; for component bases, test/distro configuration | `--base-image NAME` selects a supporting image independently of its artifact origin |
+
+For example, `--source-dir` tries edited tests against the same selected artifacts.
+`--execution` changes the target environment, not the framework. Artifact-origin
+flags change candidate bytes, not test selection.
+
+LISA uses VMs; pytest inspects artifacts on the host without booting them.
+TMT supports VM/container image tests and additionally SSH/host component tests.
+Unsupported combinations are errors, not silently skipped work.
 
 ## Predictable artifact choices
 
@@ -49,55 +60,65 @@ LKG means publisher-advertised last-known-good, not an azldev certification.
 Reused output is not claimed to match current sources. Failed builds/downloads
 must not silently switch artifact origins.
 
-## Configuration and image identity
+## Configuration connects the choices
 
-Keep `[tests]`, `[test-groups]`, and their existing associations. Add:
+Keep the existing test catalog and associations; add published inputs, execution
+defaults, and image-specific setup:
 
-- Test execution defaults: strategy and named supporting images.
-- Distro-version catalogs: published `images`, complete `test-packages` sets,
-  and `test-base-images` defaults.
-- Named-image TMT bootstrap: `test-defaults.tmt.cloud-init-runcmds`.
-- Pinned pytest sources and additional explicit TMT configuration.
+**Publishers advertise LKG locations and image-specific test setup** in the selected
+distro/version. These snippets extend an existing project; URLs and commit SHA
+are illustrative placeholders.
 
-**The same image name within a distro/version means one logical image**, whether
-its bytes are local or published. TMT guest setup comes from the distro image,
-then explicit project-image overrides, then per-test overrides. Lists replace;
-`[]` disables inherited commands. Project overrides therefore affect LKG runs too.
+```toml
+[distros.azurelinux.versions."4.0"]
+release-ver = "4.0"
+test-base-images = { vm = "vm-base" }
 
-A bare `--base-image-path` is anonymous and inherits no guessed image identity.
-Adding `--base-image vm-base` explicitly associates that file with the named
-image. Bootstrap settings apply only to managed TMT VMs, not the host or other
-frameworks.
+[distros.azurelinux.versions."4.0".images.vm-base.architectures]
+x86_64 = [{ format = "qcow2", uri = "https://example.test/lkg/vm-base.qcow2" }]
 
-## Guardrails and migration
+[distros.azurelinux.versions."4.0".images.vm-base.test-defaults.tmt]
+cloud-init-runcmds = [
+  "firewall-cmd --add-service=ssh && firewall-cmd --add-port=10022/tcp",
+]
+```
 
-The existing `component test` and `image test` commands remain supported, but
-behavior changes need review: missing output may now trigger builds, an empty
-execution selection is an error, and tests continue after failures unless
-`--fail-fast` is requested.
+The firewall command runs **inside a managed TMT guest before readiness checks**.
+It is appropriate for a firewalld image using testcloud's session connection,
+not a universal requirement or a host firewall change. Other architectures and
+formats have their own catalog entries; downloads may include `sha256`.
+Published RPM sets similarly live under the distro version's `test-packages`.
 
-Execution still needs a configured project and default distro/version, even for
-supplied files. It does not require `--without-lockfile`. Test selection skips
-packaging-lock consistency checks, including before implicit builds; customers
-needing that check should run `component build` first.
+**Test authors select the framework, sources, and execution defaults**, then
+associate that test with a subject:
 
-Original artifacts and managed test-source trees are preserved. Host/SSH tests
-can modify their designated targets; disposable environments and trusted tests
-remain essential.
+```toml
+[tests.curl-smoke]
+type = "tmt"
 
-CI receives consistent outcomes, retained native evidence, and optional aggregate
-JUnit. Failures return nonzero; all-skipped runs succeed, while zero collected
-cases are errors. Execution stdout may contain native logs even with `-O json`,
-so automation should read the retained `results.json` in a unique work directory.
+[tests.curl-smoke.execution]
+strategy = "vm"
+base-images = { vm = "vm-base" }
 
-## Review decisions and scope
+[tests.curl-smoke.tmt]
+source = { git-url = "https://example.test/curl-tests.git", ref = "0123456789abcdef0123456789abcdef01234567" }
+plan = "/plans/smoke"
 
-Approve consistent behavior across the existing verbs, local-subject/LKG-base
-defaults, shared-name image policy, and documented migration effects. Success
-means predictable input selection and usable results across the three frameworks.
+[components.curl.tests]
+tests = [{ name = "curl-smoke" }]
+```
 
-**Deferred:** a top-level test command family, catalog enumeration, dynamic
-native-case discovery, `--results-json`, projectless execution, automatic
-conflict-aware RPM selection, and cloud/SKU orchestration.
-The [full PRD](artifact-testing-prd.md) contains detailed syntax, schema examples,
-compatibility changes, and acceptance criteria.
+`azldev component test curl` now combines local candidate RPMs, the published
+`vm-base`, and the pinned TMT plan. The per-test `base-images` mapping overrides
+the distro default; `--base-image` overrides both. Image testing uses its subject
+image instead of a separate base.
+
+**Image identity remains independent of origin.** Within a distro/version,
+`vm-base` means the same logical image whether local or published. Guest setup
+resolves from the catalog, then `[images.vm-base.test-defaults.tmt]`, then the
+selected test's `tmt` settings. Explicit lists replace earlier lists; `[]` clears
+them. Project overrides therefore apply to LKG runs too.
+
+A bare `--base-image-path` is anonymous. Add `--base-image vm-base` to explicitly
+associate that file with the image's defaults. These bootstrap defaults apply
+only to managed TMT VMs, not other frameworks or execution strategies.
